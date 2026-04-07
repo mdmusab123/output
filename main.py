@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify, render_template_string
+import json
+from flask import Flask, request, Response, stream_with_context, render_template_string
 import requests
 
 app = Flask(__name__)
@@ -301,7 +302,7 @@ HTML = """
         }
 
         // ==========================================
-        // UI Interaction & Rendering
+        // UI Interaction & Streaming Rendering
         // ==========================================
 
         function toggleSettings() {
@@ -312,6 +313,44 @@ HTML = """
             systemPrompt = sysPromptInput.value.trim();
             localStorage.setItem('ai_system_prompt', systemPrompt);
             toggleSettings();
+        }
+
+        function formatMarkdown(content) {
+            const rawMarkup = marked.parse(content);
+            return DOMPurify.sanitize(rawMarkup, { ADD_CLASSES: {'code': 'hljs', 'pre': 'hljs'} });
+        }
+
+        function finalizeCodeBlocks(container) {
+            container.querySelectorAll('pre').forEach((preBlock) => {
+                if (preBlock.parentNode.classList.contains('group')) return; // Already wrapped
+                
+                // Highlight inner code
+                const codeBlock = preBlock.querySelector('code');
+                if(codeBlock) hljs.highlightElement(codeBlock);
+
+                // Add wrapper and copy button
+                const wrapper = document.createElement('div');
+                wrapper.className = 'relative group mt-3 mb-3 rounded-lg overflow-hidden border border-[#333]';
+                
+                preBlock.parentNode.insertBefore(wrapper, preBlock);
+                wrapper.appendChild(preBlock);
+                preBlock.style.margin = '0'; // Remove default prose margin inside wrapper
+
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'absolute top-2 right-2 px-2 py-1.5 rounded bg-[#2f2f2f] text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 text-xs font-medium border border-[#424242] shadow-sm';
+                copyBtn.innerHTML = '<i data-lucide="copy" class="w-3 h-3"></i> Copy';
+                copyBtn.onclick = () => {
+                    navigator.clipboard.writeText(codeBlock ? codeBlock.innerText : preBlock.innerText);
+                    copyBtn.innerHTML = '<i data-lucide="check" class="w-3 h-3 text-green-500"></i> Copied';
+                    lucide.createIcons({ root: copyBtn });
+                    setTimeout(() => {
+                        copyBtn.innerHTML = '<i data-lucide="copy" class="w-3 h-3"></i> Copy';
+                        lucide.createIcons({ root: copyBtn });
+                    }, 2000);
+                };
+                wrapper.appendChild(copyBtn);
+            });
+            lucide.createIcons({ root: container });
         }
 
         function appendMessage(role, content, id = null) {
@@ -327,11 +366,9 @@ HTML = """
 
             let contentHtml = content;
             if (isAI && content !== '...') {
-                const rawMarkup = marked.parse(content);
-                // Sanitize HTML but keep classes needed for styling
-                contentHtml = DOMPurify.sanitize(rawMarkup, { ADD_CLASSES: {'code': 'hljs', 'pre': 'hljs'} });
+                contentHtml = formatMarkdown(content);
             } else if (!isAI) {
-                contentHtml = content.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\\n/g, "<br>");
+                contentHtml = content.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>");
             }
 
             if (content === '...') {
@@ -347,7 +384,7 @@ HTML = """
             div.innerHTML = `
                 ${avatarHtml}
                 <div class="flex-1 min-w-0 pt-1">
-                    <div class="prose prose-invert max-w-none text-[15px] text-gray-200 leading-relaxed">
+                    <div class="prose prose-invert max-w-none text-[15px] text-gray-200 leading-relaxed content-container">
                         ${contentHtml}
                     </div>
                 </div>
@@ -356,35 +393,9 @@ HTML = """
             chatEl.appendChild(div);
             lucide.createIcons({ root: div });
             
-            // Post-processing for Code Blocks (Highlighting & Copy Button)
+            // Post-processing for loaded history
             if (isAI && content !== '...') {
-                div.querySelectorAll('pre').forEach((preBlock) => {
-                    // Highlight inner code
-                    const codeBlock = preBlock.querySelector('code');
-                    if(codeBlock) hljs.highlightElement(codeBlock);
-
-                    // Add wrapper and copy button
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'relative group mt-3 mb-3 rounded-lg overflow-hidden border border-[#333]';
-                    
-                    preBlock.parentNode.insertBefore(wrapper, preBlock);
-                    wrapper.appendChild(preBlock);
-                    preBlock.style.margin = '0'; // Remove default prose margin inside wrapper
-
-                    const copyBtn = document.createElement('button');
-                    copyBtn.className = 'absolute top-2 right-2 px-2 py-1.5 rounded bg-[#2f2f2f] text-gray-400 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1.5 text-xs font-medium border border-[#424242] shadow-sm';
-                    copyBtn.innerHTML = '<i data-lucide="copy" class="w-3 h-3"></i> Copy';
-                    copyBtn.onclick = () => {
-                        navigator.clipboard.writeText(codeBlock ? codeBlock.innerText : preBlock.innerText);
-                        copyBtn.innerHTML = '<i data-lucide="check" class="w-3 h-3 text-green-500"></i> Copied';
-                        lucide.createIcons({ root: copyBtn });
-                        setTimeout(() => {
-                            copyBtn.innerHTML = '<i data-lucide="copy" class="w-3 h-3"></i> Copy';
-                            lucide.createIcons({ root: copyBtn });
-                        }, 2000);
-                    };
-                    wrapper.appendChild(copyBtn);
-                });
+                finalizeCodeBlocks(div);
             }
 
             scrollToBottom();
@@ -411,7 +422,8 @@ HTML = """
 
             appendMessage("user", text);
             const loadingId = "loading-" + Date.now();
-            const loadingEl = appendMessage("ai", "...", loadingId);
+            const messageDiv = appendMessage("ai", "...", loadingId);
+            const contentContainer = messageDiv.querySelector('.content-container');
 
             try {
                 // Prepare payload with system prompt if it exists
@@ -426,18 +438,34 @@ HTML = """
                     body: JSON.stringify({ messages: payloadMessages })
                 });
 
-                const data = await response.json();
-                
-                loadingEl.remove();
-                appendMessage("ai", data.reply);
+                if (!response.ok) throw new Error("Network error");
+
+                // Stream processing
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let accumulatedResponse = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    accumulatedResponse += chunk;
+
+                    // Update UI live as chunks stream in
+                    contentContainer.innerHTML = formatMarkdown(accumulatedResponse);
+                    scrollToBottom();
+                }
+
+                // Finalize specific elements (e.g., Code Highlight & Copy Buttons)
+                finalizeCodeBlocks(messageDiv);
                 
                 // Add AI reply to history and save
-                messageHistory.push({ role: "assistant", content: data.reply });
+                messageHistory.push({ role: "assistant", content: accumulatedResponse });
                 saveData();
 
             } catch (error) {
-                loadingEl.remove();
-                appendMessage("ai", "**Error:** Failed to connect to the AI API. Check your network or server status.");
+                contentContainer.innerHTML = formatMarkdown("**Error:** Failed to connect to the AI API. Check your network or server status.");
                 messageHistory.pop(); // Revert user message on fail
                 saveData();
             } finally {
@@ -455,32 +483,40 @@ HTML = """
 </html>
 """
 
-def ask_ai(messages):
+def ask_ai_stream(messages):
     try:
+        # Enable stream=True to continuously receive data chunks from the model
         response = requests.post(
             API_URL,
             json={
                 "model": MODEL,
                 "messages": messages,
-                "stream": False
+                "stream": True # Command the API to stream back
             },
+            stream=True,       # Let python requests handle the stream chunks
             timeout=60
         )
         
-        data = response.json()
+        response.raise_for_status()
 
-        if "message" in data:
-            return data["message"]["content"]
-        elif "response" in data:
-            return data["response"]
-        else:
-            return str(data)
-            
+        # Iterate over new lines representing streaming chunks
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode('utf-8')
+                try:
+                    data = json.loads(decoded_line)
+                    # Extract content chunks natively from the JSON lines
+                    if "message" in data and "content" in data["message"]:
+                        yield data["message"]["content"]
+                    elif "response" in data:
+                        yield data["response"]
+                except json.JSONDecodeError:
+                    continue
+                    
     except requests.exceptions.Timeout:
-        return "Request timed out. The model took too long to respond."
+        yield "\n\n**Error:** Request timed out. The model took too long to respond."
     except Exception as e:
-        return "Connection error: " + str(e)
-
+        yield f"\n\n**Error:** Connection error: {str(e)}"
 
 @app.route("/")
 def home():
@@ -489,10 +525,8 @@ def home():
 @app.route("/chat", methods=["POST"])
 def chat():
     messages = request.json.get("messages", [])
-    reply = ask_ai(messages)
-    return jsonify({
-        "reply": reply
-    })
+    # Return a streamed plain-text response that our Javascript client will assemble chunk-by-chunk
+    return Response(stream_with_context(ask_ai_stream(messages)), mimetype='text/plain')
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True)
