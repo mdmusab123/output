@@ -298,7 +298,7 @@ HTML = """
                 }
                 if (currentChat) currentChat.messages = [...messageHistory];
                 
-                localStorage.setItem('ai_chats_v2', JSON.stringify(chats));
+                saveState();
                 renderSidebar();
 
             } catch (err) {
@@ -309,6 +309,10 @@ HTML = """
                 inputEl.focus();
                 hljs.highlightAll();
             }
+        }
+
+        function saveState() {
+            localStorage.setItem('ai_chats_v2', JSON.stringify(chats));
         }
     </script>
 </body>
