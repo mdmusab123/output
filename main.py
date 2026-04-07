@@ -276,58 +276,16 @@ HTML = """
                     body: JSON.stringify({ messages: fullHistory })
                 });
 
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(errorText || "Server Error");
-                }
-
-                if (!response.body) throw new Error("No response stream available.");
+                if (!response.ok) throw new Error("Server Error");
 
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
-                let streamBuffer = "";
                 let accumulated = "";
 
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
-
-                    streamBuffer += decoder.decode(value, { stream: true });
-                    let newlineIndex;
-
-                    while ((newlineIndex = streamBuffer.indexOf("\n")) !== -1) {
-                        const line = streamBuffer.slice(0, newlineIndex).trim();
-                        streamBuffer = streamBuffer.slice(newlineIndex + 1);
-                        if (!line) continue;
-
-                        let chunk = line;
-                        if (chunk.startsWith("data:")) {
-                            chunk = chunk.slice(5).trim();
-                        }
-                        if (chunk === "[DONE]") continue;
-
-                        try {
-                            const parsed = JSON.parse(chunk);
-                            if (parsed?.message?.content) {
-                                accumulated += parsed.message.content;
-                            } else if (parsed?.response) {
-                                accumulated += parsed.response;
-                            } else if (parsed?.content) {
-                                accumulated += parsed.content;
-                            } else {
-                                accumulated += chunk;
-                            }
-                        } catch {
-                            accumulated += chunk;
-                        }
-
-                        contentArea.innerHTML = formatMarkdown(accumulated);
-                        scrollToBottom();
-                    }
-                }
-
-                if (streamBuffer.trim()) {
-                    accumulated += streamBuffer;
+                    accumulated += decoder.decode(value);
                     contentArea.innerHTML = formatMarkdown(accumulated);
                     scrollToBottom();
                 }
@@ -369,38 +327,26 @@ def ask_ai_stream(messages):
             json={
                 "model": MODEL,
                 "messages": messages,
-                "stream": True
+                "stream": True 
             },
-            stream=True,
+            stream=True,       
             timeout=120
         )
         response.raise_for_status()
 
-        for line in response.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-
-            decoded_line = line.strip()
-            if decoded_line.startswith("data:"):
-                decoded_line = decoded_line[5:].strip()
-            if decoded_line == "[DONE]":
-                break
-
-            try:
-                data = json.loads(decoded_line)
-            except json.JSONDecodeError:
-                # If the provider returns plain text or partial chunks, forward them directly.
-                yield decoded_line
-                continue
-
-            if isinstance(data, dict):
-                if "message" in data and isinstance(data["message"], dict) and "content" in data["message"]:
-                    yield data["message"]["content"]
-                elif "response" in data:
-                    yield data["response"]
-                elif "content" in data:
-                    yield data["content"]
-
+        for line in response.iter_lines():
+            if line:
+                decoded_line = line.decode('utf-8')
+                try:
+                    data = json.loads(decoded_line)
+                    # Check Ollama's common response structures
+                    if "message" in data and "content" in data["message"]:
+                        yield data["message"]["content"]
+                    elif "response" in data:
+                        yield data["response"]
+                except json.JSONDecodeError:
+                    continue
+                    
     except Exception as e:
         yield f" [Backend Error: {str(e)}] "
 
@@ -412,7 +358,7 @@ def home():
 def chat():
     data = request.json or {}
     messages = data.get("messages", [])
-    return Response(stream_with_context(ask_ai_stream(messages)), mimetype='text/event-stream')
+    return Response(stream_with_context(ask_ai_stream(messages)), mimetype='text/plain')
 
 if __name__ == "__main__":
     # Using threaded=True to allow streaming and UI interactions simultaneously
