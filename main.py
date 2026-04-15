@@ -18,6 +18,8 @@ app = Flask(__name__)
 MODEL = "gemma4:e4b"
 API_URL = "http://127.0.0.1:11434/api/chat"
 UPLOAD_FOLDER = "uploads"
+NGROK_AUTH_TOKEN = "1xaBGSEtDnlLgIK663nvwSaOiRq_Vgj6aPE1FDxgpk9dh2MR" # Set your authtoken here
+ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # --- CHROMA DB SETUP (LOCAL RAG) ---
