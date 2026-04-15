@@ -142,7 +142,7 @@ def get_memories():
     except:
         return []
 
-# --- WEB SEARCH ---
+# --- WEB SEARCH & SCRAPING ---
 from bs4 import BeautifulSoup
 import urllib.parse
 def search_web(query):
@@ -156,18 +156,66 @@ def search_web(query):
         soup = BeautifulSoup(r.text, 'html.parser')
         
         results = []
-        for a in soup.find_all('a', class_='result__snippet'):
-            results.append(a.text.strip())
+        for d in soup.find_all('div', class_='result'):
+            a_url = d.find('a', class_='result__url')
+            a_snippet = d.find('a', class_='result__snippet')
+            if a_url and a_snippet:
+                href = a_url.get('href', '').strip()
+                # DuckDuckGo sometimes wraps hrefs, unquote them
+                if href.startswith('//duckduckgo.com/l/?uddg='):
+                    href = urllib.parse.unquote(href.split('uddg=')[1].split('&')[0])
+                snippet = a_snippet.text.strip()
+                results.append((href, snippet))
             if len(results) >= 3:
                 break
                 
-        res_strings = [f"- Snippet {i+1}: {text}" for i, text in enumerate(results)]
-        return "\n".join(res_strings) if res_strings else "No web results found."
+        res_strings = [f"- Source [URL]: {url} \n  Snippet: {text}" for url, text in results]
+        return "\n\n".join(res_strings) if res_strings else "No web results found."
     except Exception as e:
         return f"Web search failed: {str(e)}"
 
+def read_url(url):
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+        }
+        r = requests.get(url, headers=headers, timeout=15)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        
+        for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            script.extract()
+            
+        text = soup.get_text(separator=' ', strip=True)
+        # Squeeze out multiple spaces/newlines
+        import re
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Limit to 5000 characters
+        if len(text) > 5000:
+            text = text[:5000] + "... [Content Truncated]"
+            
+        return text if text else "No readable text found on page."
+    except Exception as e:
+        return f"Failed to read URL: {str(e)}"
+
+# --- LOCAL PYTHON EXECUTION ---
+import sys, io, traceback
+def execute_python(code_str):
+    captured_output = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = captured_output
+    try:
+        exec(code_str, {})
+        output = captured_output.getvalue()
+        return output if output.strip() else "Executed successfully but there was no printed output."
+    except Exception as e:
+        tb = traceback.format_exc()
+        return f"Python Execution Error:\n{tb}"
+    finally:
+        sys.stdout = old_stdout
+
 # --- AGENTIC LOOP AND PARSER ---
-def ask_ai_stream(messages, tools_enabled=True):
+def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True):
     if tools_enabled:
         memories = get_memories()
         if memories:
@@ -178,7 +226,7 @@ def ask_ai_stream(messages, tools_enabled=True):
         try:
             response = requests.post(
                 API_URL,
-                json={"model": MODEL, "messages": msgs, "stream": True},
+                json={"model": target_model, "messages": msgs, "stream": True},
                 stream=True,       
                 timeout=120
             )
@@ -216,6 +264,8 @@ def ask_ai_stream(messages, tools_enabled=True):
                     search_match = re.search(r'\[SEARCH:\s*(.*?)\]', buffer)
                     mem_save_match = re.search(r'\[MEM_SAVE:\s*(.*?)\]', buffer)
                     doc_search_match = re.search(r'\[SEARCH_DOC:\s*(.*?)\]', buffer)
+                    read_url_match = re.search(r'\[READ_URL:\s*(.*?)\]', buffer)
+                    python_match = re.search(r'\[PYTHON:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     
                     if search_match:
                         query = search_match.group(1).strip()
@@ -247,15 +297,43 @@ def ask_ai_stream(messages, tools_enabled=True):
                         current_run_msgs.append({"role": "user", "content": f"System Notice: Local Document Results:\n{tool_result}\n\nSynthesize this information to answer the initial query."})
                         tool_triggered = True
                         break
+
+                    elif read_url_match:
+                        url = read_url_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"🌐 Reading webpage: {url}"}) + "\n"
+                        tool_result = read_url(url)
+                        
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Extracted Website Application Text:\n{tool_result}\n\nSynthesize this information to answer the user's initial query."})
+                        tool_triggered = True
+                        break
+
+                    elif python_match:
+                        code = python_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"⚙️ Executing Python Script..."}) + "\n"
+                        # Extra visual flourish: yield the code to the user chat UI too so they see what runs
+                        yield json.dumps({"type": "content", "text": f"\n```python\n{code}\n```\n"}) + "\n"
+                        
+                        tool_result = execute_python(code)
+                        
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Python Execution Output (stdout/stderr):\n{tool_result}\n\nUse this information to answer the initial query."})
+                        tool_triggered = True
+                        break
                     
                     if len(buffer) > 60:
-                        idx = buffer.rfind('[')
-                        if idx > 0:
-                            yield json.dumps({"type": "content", "text": buffer[:idx]}) + "\n"
-                            buffer = buffer[idx:]
+                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON):', buffer):
+                            if len(buffer) > 5000: # safety bailout
+                                yield json.dumps({"type": "content", "text": buffer}) + "\n"
+                                buffer = ""
                         else:
-                            yield json.dumps({"type": "content", "text": buffer}) + "\n"
-                            buffer = ""
+                            idx = buffer.rfind('[')
+                            if idx > 0:
+                                yield json.dumps({"type": "content", "text": buffer[:idx]}) + "\n"
+                                buffer = buffer[idx:]
+                            else:
+                                yield json.dumps({"type": "content", "text": buffer}) + "\n"
+                                buffer = ""
                 else:
                     yield json.dumps({"type": "content", "text": buffer}) + "\n"
                     buffer = ""
@@ -265,7 +343,7 @@ def ask_ai_stream(messages, tools_enabled=True):
                 continue
             else:
                 if buffer:
-                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC).*$', '', buffer)
+                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON).*$', '', buffer, flags=re.DOTALL)
                     if clean_buf:
                         yield json.dumps({"type": "content", "text": clean_buf}) + "\n"
                 break
@@ -277,13 +355,25 @@ def ask_ai_stream(messages, tools_enabled=True):
 def home():
     return render_template("index.html")
 
+@app.route("/models", methods=["GET"])
+def get_models():
+    try:
+        r = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        models = [m["name"] for m in data.get("models", [])]
+        return {"models": models}
+    except Exception as e:
+        return {"error": str(e)}, 500
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.json or {}
     messages = data.get("messages", [])
     tools_enabled = data.get("tools_enabled", True)
+    target_model = data.get("model", MODEL)
     
-    return Response(stream_with_context(ask_ai_stream(messages, tools_enabled)), mimetype='application/x-ndjson')
+    return Response(stream_with_context(ask_ai_stream(messages, target_model, tools_enabled)), mimetype='application/x-ndjson')
 
 if __name__ == "__main__":
     try:
