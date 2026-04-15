@@ -241,17 +241,60 @@ def read_url(url):
             script.extract()
             
         text = soup.get_text(separator=' ', strip=True)
-        # Squeeze out multiple spaces/newlines
         import re
         text = re.sub(r'\s+', ' ', text)
         
-        # Limit to 5000 characters
         if len(text) > 5000:
             text = text[:5000] + "... [Content Truncated]"
             
         return text if text else "No readable text found on page."
     except Exception as e:
         return f"Failed to read URL: {str(e)}"
+
+def get_search_urls(query, tavily_key="", max_urls=3):
+    """Returns list of (url, title, snippet) tuples from search results."""
+    urls = []
+    if tavily_key and tavily_key.strip():
+        try:
+            r = requests.post("https://api.tavily.com/search", json={
+                "api_key": tavily_key.strip(),
+                "query": query,
+                "search_depth": "advanced",
+                "max_results": max_urls + 2,
+                "include_images": False,
+                "include_answer": False
+            }, timeout=15)
+            r.raise_for_status()
+            for item in r.json().get("results", [])[:max_urls]:
+                u = item.get("url", "")
+                if u:
+                    urls.append((u, item.get("title", u), item.get("content", "")))
+            if urls:
+                return urls
+        except Exception:
+            pass
+    # DuckDuckGo fallback
+    try:
+        r = requests.post("https://lite.duckduckgo.com/lite/",
+            data={"q": query},
+            headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded"},
+            timeout=10)
+        soup = BeautifulSoup(r.text, 'html.parser')
+        for tr in soup.find_all('tr'):
+            td = tr.find('td', class_='result-snippet')
+            if td:
+                a_tag = tr.previous_sibling.find('a', class_='result-url') if tr.previous_sibling else None
+                if a_tag:
+                    href = a_tag.get('href', '').strip()
+                    if href.startswith('//duckduckgo.com/l/?uddg='):
+                        href = urllib.parse.unquote(href.split('uddg=')[1].split('&')[0])
+                    urls.append((href, href, td.text.strip()))
+            if len(urls) >= max_urls:
+                break
+    except Exception:
+        pass
+    return urls
+
 
 # --- LOCAL PYTHON EXECUTION ---
 import sys, io, traceback
@@ -412,7 +455,12 @@ Output ONLY the exact category string and nothing else."""
                 if "[ROUTE: RESEARCH]" in route_text:
                     cat = "RESEARCH"
                     icon = "🔍 Explorer Node"
-                    tool_instructions = "You are the Explorer Node. YOU DO NOT HAVE INTERNAL KNOWLEDGE. To answer, you MUST use a tool. Output ONLY this syntax:\n[SEARCH: specific query]\nor\n[READ_URL: https://...]\nDO NOT CONVERSE. DO NOT ANSWER FROM MEMORY."
+                    tool_instructions = (
+                        "You are the Explorer Node — a multi-step research agent.\n"
+                        "For SIMPLE factual questions, use: [SEARCH: query]\n"
+                        "For COMPLEX questions needing deep research (guides, comparisons, multi-topic reports), use: [DEEP_RESEARCH: query]\n"
+                        "DO NOT CONVERSE. Output ONLY the tool syntax. DO NOT ANSWER FROM MEMORY."
+                    )
                 elif "[ROUTE: CODE]" in route_text:
                     cat = "CODE"
                     icon = "🤖 Coder Node"
@@ -476,6 +524,7 @@ Output ONLY the exact category string and nothing else."""
                 buffer += chunk
 
                 if '[' in buffer:
+                    deep_research_match = re.search(r'\[DEEP_RESEARCH:\s*(.*?)\]', buffer)
                     search_match = re.search(r'\[SEARCH:\s*(.*?)\]', buffer)
                     mem_save_match = re.search(r'\[MEM_SAVE:\s*(.*?)\]', buffer)
                     doc_search_match = re.search(r'\[SEARCH_DOC:\s*(.*?)\]', buffer)
@@ -483,8 +532,29 @@ Output ONLY the exact category string and nothing else."""
                     python_match = re.search(r'\[PYTHON:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     shell_match = re.search(r'\[RUN_SHELL:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     save_tool_match = re.search(r'\[SAVE_TOOL:\s*([^\]]+)\](.*?)\[/SAVE_TOOL\]', buffer, re.DOTALL)
-                    
-                    if search_match:
+
+                    if deep_research_match:
+                        query = deep_research_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"🌐 Deep Research initiated: '{query}'"}) + "\n"
+                        source_urls = get_search_urls(query, tavily_key, max_urls=3)
+                        if not source_urls:
+                            tool_result = "Deep research yielded no sources. Please try a different query."
+                        else:
+                            yield json.dumps({"type": "status", "text": f"📡 Found {len(source_urls)} sources. Reading each one..."}) + "\n"
+                            all_content = []
+                            for i, (src_url, title, snippet) in enumerate(source_urls):
+                                yield json.dumps({"type": "status", "text": f"📖 Reading source {i+1}/{len(source_urls)}: {title[:60]}"}) + "\n"
+                                page_text = read_url(src_url)
+                                all_content.append(f"=== Source {i+1}: {title} ===\nURL: {src_url}\n{page_text}")
+                            tool_result = "\n\n".join(all_content)
+                            yield json.dumps({"type": "status", "text": f"✅ Deep Research complete. Synthesizing answer from {len(source_urls)} sources..."}) + "\n"
+
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Deep Research Results (from {len(source_urls)} live sources):\n{tool_result}\n\nNow synthesize this data into a comprehensive, well-structured answer for the user's original query. Use headers, bullet points, and tables where appropriate."})
+                        tool_triggered = True
+                        break
+
+                    elif search_match:
                         query = search_match.group(1).strip()
                         yield json.dumps({"type": "status", "text": f"🔍 ... searching on web for: '{query}'"}) + "\n"
                         tool_result = search_web(query, tavily_key)
