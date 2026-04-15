@@ -4,6 +4,7 @@ import re
 import sqlite3
 import os
 import uuid
+import time
 from flask import Flask, request, Response, stream_with_context, render_template
 import requests
 from pyngrok import ngrok
@@ -70,6 +71,79 @@ try:
     memory_collection = chroma_client.get_or_create_collection(name="long_term_memory")
 except Exception as e:
     print(f"ChromaDB Init Error: {e}. Document search will be unavailable.")
+
+# --- GRAPHRAG: SQLite Knowledge Graph ---
+GRAPH_DB_PATH = "knowledge_graph.db"
+
+def init_graph_db():
+    conn = sqlite3.connect(GRAPH_DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS kg_nodes
+                 (id TEXT PRIMARY KEY, label TEXT, type TEXT, created_at REAL)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS kg_edges
+                 (id TEXT PRIMARY KEY, source TEXT, target TEXT, relation TEXT, created_at REAL)''')
+    conn.commit()
+    conn.close()
+
+init_graph_db()
+
+def graph_upsert_node(node_id, label, node_type):
+    conn = sqlite3.connect(GRAPH_DB_PATH)
+    conn.execute("INSERT OR IGNORE INTO kg_nodes VALUES (?, ?, ?, ?)",
+                 (node_id, label[:200], node_type, time.time()))
+    conn.commit()
+    conn.close()
+
+def graph_add_edge(source, target, relation="related_to"):
+    edge_id = f"e_{uuid.uuid4().hex[:8]}"
+    conn = sqlite3.connect(GRAPH_DB_PATH)
+    conn.execute("INSERT OR IGNORE INTO kg_edges VALUES (?, ?, ?, ?, ?)",
+                 (edge_id, source, target, relation, time.time()))
+    conn.commit()
+    conn.close()
+
+def graph_get_linked_memories(entity_ids):
+    """Given a list of entity node IDs, find all memory IDs linked to them."""
+    if not entity_ids:
+        return []
+    conn = sqlite3.connect(GRAPH_DB_PATH)
+    placeholders = ",".join(["?"]*len(entity_ids))
+    rows = conn.execute(
+        f"SELECT DISTINCT source FROM kg_edges WHERE target IN ({placeholders}) "
+        f"AND source LIKE 'mem_%'",
+        entity_ids
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+def graph_get_all_nodes():
+    conn = sqlite3.connect(GRAPH_DB_PATH)
+    nodes = conn.execute("SELECT id, label, type FROM kg_nodes").fetchall()
+    conn.close()
+    return nodes
+
+def graph_get_all_edges():
+    conn = sqlite3.connect(GRAPH_DB_PATH)
+    edges = conn.execute("SELECT source, target, relation FROM kg_edges").fetchall()
+    conn.close()
+    return edges
+
+def extract_entities(text):
+    """Uses Ollama to extract named entities from a text snippet. Returns list of strings."""
+    try:
+        prompt = (f"Extract all named entities (projects, names, tools, bugs, dates, companies, features) "
+                  f"from this text. Return ONLY a comma-separated list, nothing else.\n\nText: {text[:500]}")
+        r = requests.post(API_URL, json={
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False
+        }, timeout=15)
+        r.raise_for_status()
+        raw = r.json().get("message", {}).get("content", "").strip()
+        entities = [e.strip().lower() for e in raw.split(",") if e.strip() and len(e.strip()) > 2]
+        return entities[:10]  # Cap at 10 entities per memory
+    except Exception:
+        return []
 
 def chunk_text(text, chunk_size=1000, overlap=200):
     chunks = []
@@ -149,15 +223,23 @@ def search_docs(query):
     except Exception as e:
         return f"Document search failed: {str(e)}"
 
-import time
+
 
 def save_memory(fact):
     try:
+        mem_id = f"mem_{uuid.uuid4().hex[:8]}"
         memory_collection.add(
             documents=[fact.strip()],
             metadatas=[{"timestamp": time.time()}],
-            ids=[f"mem_{uuid.uuid4().hex[:8]}"]
+            ids=[mem_id]
         )
+        # --- GRAPHRAG: Extract entities and wire into knowledge graph ---
+        graph_upsert_node(mem_id, fact.strip()[:120], "memory")
+        entities = extract_entities(fact)
+        for ent in entities:
+            ent_id = f"ent_{ent.replace(' ', '_')[:40]}"
+            graph_upsert_node(ent_id, ent, "entity")
+            graph_add_edge(mem_id, ent_id, "mentions")
         return True
     except Exception as e:
         print(f"Memory DB Error: {e}")
@@ -167,14 +249,26 @@ def retrieve_relevant_memories(query_text):
     try:
         if memory_collection.count() == 0:
             return []
-        results = memory_collection.query(
-            query_texts=[query_text],
-            n_results=5
-        )
-        if results and results['documents'] and results['documents'][0]:
-            return results['documents'][0]
-        return []
-    except:
+        # Step 1: Vector search for top-5 direct matches
+        results = memory_collection.query(query_texts=[query_text], n_results=5)
+        direct_ids = results.get('ids', [[]])[0] if results else []
+        direct_docs = results.get('documents', [[]])[0] if results else []
+
+        # Step 2: GraphRAG — find entities in query, walk graph to find connected memories
+        query_entities = extract_entities(query_text)
+        entity_ids = [f"ent_{e.replace(' ', '_')[:40]}" for e in query_entities]
+        graph_mem_ids = graph_get_linked_memories(entity_ids)
+
+        # Step 3: Fetch graph-linked memory docs not already in direct results
+        extra_docs = []
+        if graph_mem_ids:
+            new_ids = [i for i in graph_mem_ids if i not in direct_ids][:3]
+            if new_ids:
+                fetched = memory_collection.get(ids=new_ids, include=["documents"])
+                extra_docs = fetched.get("documents", []) if fetched else []
+
+        return direct_docs + extra_docs
+    except Exception:
         return []
 
 # --- WEB SEARCH & SCRAPING ---
@@ -904,37 +998,47 @@ def serve_chart(filename):
 @app.route("/memories_graph", methods=["GET"])
 def get_memories_graph():
     try:
-        if memory_collection.count() == 0:
-            return {"nodes": [{"id": "user", "name": "Nexus Core", "val": 15, "color": "#14b8a6"}], "links": []}
-            
-        data = memory_collection.get(include=["documents", "metadatas"])
-        docs = data.get("documents", [])
-        ids = data.get("ids", [])
-        
-        nodes = [{"id": "user", "name": "Nexus Core", "val": 15, "color": "#14b8a6"}]
+        # Core node
+        nodes = [{"id": "nexus_core", "name": "Nexus Core", "val": 20, "color": "#14b8a6", "type": "core"}]
         links = []
-        
-        for i, doc in enumerate(docs):
-            node_id = ids[i]
+
+        # Load all graph nodes (memories + entities)
+        all_kg_nodes = graph_get_all_nodes()   # (id, label, type)
+        all_kg_edges = graph_get_all_edges()   # (source, target, relation)
+
+        known_ids = {"nexus_core"}
+        for (node_id, label, ntype) in all_kg_nodes:
+            if ntype == "memory":
+                color = "#f59e0b"   # amber — memory nodes
+                val = 8
+            else:
+                color = "#a855f7"   # violet — entity nodes
+                val = 5
             nodes.append({
-                "id": node_id, 
-                "name": doc, 
-                "val": min(8, max(3, len(doc)/20)), 
-                "color": "#f59e0b",
-                "desc": f"Memory {i+1}:\n{doc}"
+                "id": node_id,
+                "name": label[:60],
+                "val": val,
+                "color": color,
+                "type": ntype,
+                "desc": f"[{ntype.upper()}] {label}"
             })
-            links.append({"source": "user", "target": node_id})
-            
-        # Basic keyword clustering for visual web effect
-        for i in range(len(docs)):
-            for j in range(i+1, len(docs)):
-                doc1_words = set(docs[i].lower().split())
-                doc2_words = set(docs[j].lower().split())
-                common = doc1_words.intersection(doc2_words)
-                valid_common = [w for w in common if len(w) > 4]
-                if len(valid_common) > 0:
-                    links.append({"source": ids[i], "target": ids[j]})
-            
+            known_ids.add(node_id)
+            # Connect memory nodes to core
+            if ntype == "memory":
+                links.append({"source": "nexus_core", "target": node_id})
+
+        # Add graph edges (memory → entity relationships)
+        for (source, target, relation) in all_kg_edges:
+            if source in known_ids and target in known_ids:
+                links.append({"source": source, "target": target, "label": relation})
+
+        # Fallback: if no graph data, pull from ChromaDB
+        if len(nodes) == 1 and memory_collection.count() > 0:
+            data = memory_collection.get(include=["documents"])
+            for i, (doc, mid) in enumerate(zip(data.get("documents", []), data.get("ids", []))):
+                nodes.append({"id": mid, "name": doc[:60], "val": 6, "color": "#f59e0b", "type": "memory"})
+                links.append({"source": "nexus_core", "target": mid})
+
         return {"nodes": nodes, "links": links}
     except Exception as e:
         return {"error": str(e)}, 500
