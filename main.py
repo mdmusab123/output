@@ -305,20 +305,24 @@ Example: If asked to ping google, output exactly and ONLY:
                 user_msgs = [m["content"] for m in current_run_msgs if m["role"] == "user"]
                 last_msgs = "\n".join([f"- {m}" for m in user_msgs[-3:]]) if user_msgs else "General query"
                 
-                # Check for "Current Event" keywords to bias the router
+                # Check for "Current Event" or "System" keywords to bias the router
                 current_event_keywords = ["current", "latest", "now", "who is", "today", "news", "status", "price"]
+                system_keywords = ["install", "pip", "modulenotfounderror", "missing module", "download"]
                 last_user_msg = user_msgs[-1].lower() if user_msgs else ""
+                
                 nudge_research = any(kw in last_user_msg for kw in current_event_keywords)
+                nudge_system = any(kw in last_user_msg for kw in system_keywords)
                     
                 router_prompt = f"""You are a routing agent. Read the user's messages to understand the context.
 Categorize the user's LATEST request into EXACTLY ONE of these strings:
 [ROUTE: RESEARCH] - Use for web search, current events, news, or identifying people/leaders.
 [ROUTE: CODE] - Use for math, logic, scripting, or python code.
 [ROUTE: DOCS] - Use for searching or reading uploaded documents/PDFS.
-[ROUTE: SYSTEM] - Use for executing local system shell commands.
+[ROUTE: SYSTEM] - Use for executing local system shell commands (e.g. installing pip packages).
 [ROUTE: GENERAL] - Use for general conversation only IF you are 100% sure the answer doesn't need live data.
 
 IMPORTANT: If the user asks about anything CURRENT (leaders, dates, news, status), you MUST choose [ROUTE: RESEARCH].
+IMPORTANT: If a Python script previously failed due to a missing module/library, or if the user asks to install/download something, you MUST choose [ROUTE: SYSTEM].
 
 Recent User Messages Context:
 {last_msgs}
@@ -327,6 +331,8 @@ Output ONLY the exact category string and nothing else."""
 
                 if force_web_search or (nudge_research and "[ROUTE: DOCS]" not in last_user_msg):
                     route_text = "[ROUTE: RESEARCH]"
+                elif nudge_system:
+                    route_text = "[ROUTE: SYSTEM]"
                 else:
                     try:
                         router_res = requests.post(API_URL, json={
