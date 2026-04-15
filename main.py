@@ -444,12 +444,16 @@ def scan_codebase(focus_query=""):
 
 # --- LOCAL PYTHON EXECUTION ---
 import sys, io, traceback
+
+# Global, persistent namespace so repeated code blocks reuse imports and variables
+persistent_python_env = {}
+
 def execute_python(code_str):
     captured_output = io.StringIO()
     old_stdout = sys.stdout
     sys.stdout = captured_output
     try:
-        exec(code_str, {})
+        exec(code_str, persistent_python_env)
         output = captured_output.getvalue()
         return output if output.strip() else "Executed successfully but there was no printed output."
     except Exception as e:
