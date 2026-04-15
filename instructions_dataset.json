@@ -1,128 +1,460 @@
 {
-    "version": "1.0",
-    "description": "Nexus Swarm Router Instruction Dataset — Teaches the AI when to use which tool and route.",
-    "routes": {
-        "RESEARCH": {
-            "description": "Web search, real-time data, current events, factual lookups.",
-            "tools": ["[SEARCH: query]", "[READ_URL: https://...]"],
-            "examples": [
-                {"input": "Who is the current president of the USA?", "action": "[SEARCH: current president of the USA 2026]"},
-                {"input": "What is the weather in Dhaka today?", "action": "[SEARCH: weather in Dhaka today]"},
-                {"input": "Latest news about AI", "action": "[SEARCH: latest AI news 2026]"},
-                {"input": "What is the population of Japan?", "action": "[SEARCH: population of Japan 2026]"},
-                {"input": "Compare GDP of India and China", "action": "[SEARCH: GDP comparison India vs China 2026]"},
-                {"input": "Who won the last FIFA World Cup?", "action": "[SEARCH: FIFA World Cup winner latest]"},
-                {"input": "What is Bitcoin price right now?", "action": "[SEARCH: Bitcoin price today]"},
-                {"input": "Tell me about the prime minister of Bangladesh", "action": "[SEARCH: current prime minister of Bangladesh 2026]"},
-                {"input": "How tall is the Eiffel Tower?", "action": "[SEARCH: height of Eiffel Tower]"},
-                {"input": "What happened in the stock market today?", "action": "[SEARCH: stock market news today]"},
-                {"input": "Who is Elon Musk?", "action": "[SEARCH: who is Elon Musk]"},
-                {"input": "What is the capital of Australia?", "action": "[SEARCH: capital of Australia]"},
-                {"input": "Show me the latest iPhone specs", "action": "[SEARCH: latest iPhone specs 2026]"},
-                {"input": "What are the side effects of paracetamol?", "action": "[SEARCH: paracetamol side effects]"},
-                {"input": "Explain quantum computing", "action": "[SEARCH: quantum computing explained]"},
-                {"input": "When was Python programming language created?", "action": "[SEARCH: Python programming language history]"},
-                {"input": "Search the web for best laptops under $1000", "action": "[SEARCH: best laptops under 1000 dollars 2026]"},
-                {"input": "Read this article: https://example.com/article", "action": "[READ_URL: https://example.com/article]"},
-                {"input": "What does this website say? https://news.ycombinator.com", "action": "[READ_URL: https://news.ycombinator.com]"},
-                {"input": "Summarize this link for me https://en.wikipedia.org/wiki/AI", "action": "[READ_URL: https://en.wikipedia.org/wiki/AI]"}
-            ],
-            "trigger_keywords": ["current", "latest", "now", "who is", "today", "news", "status", "price", "population", "compare", "details of", "how many", "weather", "what is", "tell me about", "explain", "search", "find", "look up", "when was", "where is", "capital of", "president", "prime minister", "winner", "score"]
+  "version": "1.0",
+  "description": "Nexus Swarm Router Instruction Dataset — teaches an AI routing agent when to trigger specific tools (Web Search, Python, File Reading, Shell Commands) based on user input. Contains 62 diverse, high-quality labeled examples across 5 routing categories.",
+  "routes": {
+    "RESEARCH": {
+      "description": "Real-world facts, current events, news, identifiers, prices, people, places, statuses, and 'Who is' queries that require live or verified external information.",
+      "tools": ["[SEARCH: query]", "[READ_URL: url]"],
+      "trigger_keywords": [
+        "who is", "what is", "latest", "current", "today", "right now", "news",
+        "price of", "cost of", "stock", "value", "rate", "exchange rate",
+        "president", "CEO", "prime minister", "leader", "government",
+        "when did", "history of", "founded", "discover", "event",
+        "weather", "forecast", "temperature", "earthquake", "hurricane",
+        "definition of", "meaning of", "what does X mean",
+        "population", "capital of", "located in", "headquarters",
+        "launch date", "release date", "update", "version", "changelog",
+        "search for", "find out", "look up", "tell me about",
+        "fact", "statistics", "data on", "research", "article",
+        "read this url", "open link", "visit website", "check website",
+        "trending", "viral", "breaking news", "announcement", "report",
+        "biography", "born", "died", "nationality", "company profile"
+      ],
+      "examples": [
+        {
+          "input": "Who is the current President of the United States in 2026?",
+          "action": "[SEARCH: current President of the United States 2026]",
+          "reasoning": "Political leadership is time-sensitive and must not be guessed."
         },
-        "CODE": {
-            "description": "Math calculations, logic, scripting, data analysis, plotting.",
-            "tools": ["[PYTHON: code]"],
-            "examples": [
-                {"input": "What is 2 + 2?", "action": "[PYTHON: print(2 + 2)]"},
-                {"input": "Calculate the factorial of 10", "action": "[PYTHON: import math; print(math.factorial(10))]"},
-                {"input": "Generate a random password", "action": "[PYTHON: import random, string; print(''.join(random.choices(string.ascii_letters + string.digits, k=16)))]"},
-                {"input": "Convert 100 USD to BDT", "action": "[PYTHON: print(f'100 USD = {100 * 121.5:.2f} BDT (approx)')]"},
-                {"input": "Sort this list: [5, 3, 8, 1, 9]", "action": "[PYTHON: print(sorted([5, 3, 8, 1, 9]))]"},
-                {"input": "What is the square root of 144?", "action": "[PYTHON: import math; print(math.sqrt(144))]"},
-                {"input": "Write a Python script to count words in a sentence", "action": "[PYTHON: s = 'hello world this is a test'; print(f'Word count: {len(s.split())}')]"},
-                {"input": "Plot a sine wave", "action": "[PYTHON: import matplotlib.pyplot as plt; import numpy as np; x=np.linspace(0,10,100); plt.plot(x,np.sin(x)); plt.savefig('sine.png'); print('Saved sine.png')]"},
-                {"input": "Solve: 3x + 5 = 20", "action": "[PYTHON: x = (20 - 5) / 3; print(f'x = {x}')]"},
-                {"input": "Generate first 20 Fibonacci numbers", "action": "[PYTHON: a,b=0,1; fib=[]\nfor _ in range(20): fib.append(a); a,b=b,a+b\nprint(fib)]"}
-            ],
-            "trigger_keywords": ["calculate", "compute", "solve", "math", "script", "code", "python", "plot", "graph", "fibonacci", "factorial", "convert", "sort", "algorithm", "function", "generate"]
+        {
+          "input": "What is the price of Bitcoin right now?",
+          "action": "[SEARCH: Bitcoin price today 2026]",
+          "reasoning": "Cryptocurrency prices change by the second. Always trigger live search."
         },
-        "DOCS": {
-            "description": "Reading, searching, and summarizing user-uploaded documents (PDF, TXT, MD).",
-            "tools": ["[SEARCH_DOC: query]"],
-            "examples": [
-                {"input": "Read the PDF file I uploaded", "action": "[SEARCH_DOC: full document content]"},
-                {"input": "Summarize my resume", "action": "[SEARCH_DOC: resume summary skills experience education]"},
-                {"input": "What does my document say about project management?", "action": "[SEARCH_DOC: project management]"},
-                {"input": "Find the contact information in my file", "action": "[SEARCH_DOC: contact information email phone address]"},
-                {"input": "List all the skills mentioned in my resume", "action": "[SEARCH_DOC: skills technical abilities competencies]"},
-                {"input": "What are the key findings in the report?", "action": "[SEARCH_DOC: key findings conclusions results]"},
-                {"input": "Extract dates from my document", "action": "[SEARCH_DOC: dates timeline schedule]"},
-                {"input": "What is the total amount in the invoice?", "action": "[SEARCH_DOC: total amount price invoice]"},
-                {"input": "Read my uploaded text file", "action": "[SEARCH_DOC: full text content]"},
-                {"input": "Analyze the attached document", "action": "[SEARCH_DOC: document analysis overview]"}
-            ],
-            "trigger_keywords": ["read the file", "pdf", "document", "uploaded", "attached", "resume", "summarize the file", "my file", "the report", "invoice", "extract from"]
+        {
+          "input": "What's the latest news on the war in Ukraine?",
+          "action": "[SEARCH: latest news Ukraine war 2026]",
+          "reasoning": "Active geopolitical events require up-to-date sourcing."
         },
-        "SYSTEM": {
-            "description": "Executing OS-level shell commands, installing packages, managing files on the local system.",
-            "tools": ["[RUN_SHELL: command]"],
-            "examples": [
-                {"input": "Install numpy", "action": "[RUN_SHELL: pip install numpy]"},
-                {"input": "What is my IP address?", "action": "[RUN_SHELL: ipconfig]"},
-                {"input": "List files in current directory", "action": "[RUN_SHELL: dir]"},
-                {"input": "Ping google.com", "action": "[RUN_SHELL: ping google.com]"},
-                {"input": "Check disk space", "action": "[RUN_SHELL: wmic logicaldisk get size,freespace,caption]"},
-                {"input": "Install the missing PyPDF2 module", "action": "[RUN_SHELL: pip install PyPDF2]"},
-                {"input": "Show running processes", "action": "[RUN_SHELL: tasklist]"},
-                {"input": "Create a new folder called projects", "action": "[RUN_SHELL: mkdir projects]"},
-                {"input": "Download this package for me", "action": "[RUN_SHELL: pip install <package_name>]"},
-                {"input": "Check Python version", "action": "[RUN_SHELL: python --version]"},
-                {"input": "Kill the process on port 5000", "action": "[RUN_SHELL: netstat -ano | findstr :5000]"},
-                {"input": "Restart the server", "action": "[RUN_SHELL: python main.py]"}
-            ],
-            "trigger_keywords": ["install", "pip", "download", "run", "execute", "shell", "command", "terminal", "modulenotfounderror", "missing module", "system", "disk", "process", "mkdir", "restart"]
+        {
+          "input": "Who is the CEO of OpenAI?",
+          "action": "[SEARCH: CEO of OpenAI 2026]",
+          "reasoning": "Corporate leadership can change. Always verify via search."
         },
-        "GENERAL": {
-            "description": "General conversation, memory saving, greetings, opinions, creative writing.",
-            "tools": ["[MEM_SAVE: fact]", "[SEARCH: query] (self-correction fallback)"],
-            "examples": [
-                {"input": "Hello!", "action": "Respond conversationally: Hello! How can I help you today?"},
-                {"input": "Remember my name is Musab", "action": "[MEM_SAVE: User's name is Musab]"},
-                {"input": "What can you do?", "action": "Respond conversationally: List capabilities."},
-                {"input": "Write a poem about the ocean", "action": "Respond creatively with a poem about the ocean."},
-                {"input": "Thank you for your help", "action": "Respond conversationally: You're welcome!"},
-                {"input": "Remember I'm working on an ISP management system", "action": "[MEM_SAVE: User is working on an ISP management system]"},
-                {"input": "Save a note: meeting at 3pm tomorrow", "action": "[MEM_SAVE: User has a meeting at 3pm tomorrow]"},
-                {"input": "Tell me a joke", "action": "Respond with a joke."},
-                {"input": "What is your name?", "action": "Respond: I am Nexus, your AI assistant."},
-                {"input": "Help me brainstorm app ideas", "action": "Respond with creative brainstorming."}
-            ],
-            "trigger_keywords": ["hello", "hi", "thanks", "remember", "save", "note", "your name", "what can you", "write a", "brainstorm", "suggest", "opinion", "creative"],
-            "self_correction_rule": "If you are in GENERAL mode but realize you need factual or real-time data to answer accurately, STOP conversing and immediately output: [SEARCH: specific query]"
+        {
+          "input": "What is the current exchange rate of USD to EUR?",
+          "action": "[SEARCH: USD to EUR exchange rate today]",
+          "reasoning": "Financial rates fluctuate constantly. Never guess."
+        },
+        {
+          "input": "What happened in the 2026 FIFA World Cup?",
+          "action": "[SEARCH: 2026 FIFA World Cup results]",
+          "reasoning": "Sports events have definitive, searchable outcomes."
+        },
+        {
+          "input": "What is the population of Japan in 2026?",
+          "action": "[SEARCH: population of Japan 2026]",
+          "reasoning": "Demographic statistics are updated annually and must be verified."
+        },
+        {
+          "input": "Who won the 2025 Nobel Prize in Physics?",
+          "action": "[SEARCH: 2025 Nobel Prize Physics winner]",
+          "reasoning": "Award winners are factual, public records to be retrieved."
+        },
+        {
+          "input": "What is the current stock price of Tesla?",
+          "action": "[SEARCH: Tesla stock price today 2026]",
+          "reasoning": "Stock prices are real-time data requiring live lookup."
+        },
+        {
+          "input": "Tell me about the new iPhone released in 2026.",
+          "action": "[SEARCH: iPhone 2026 new model features release date]",
+          "reasoning": "Product release information requires current sourcing."
+        },
+        {
+          "input": "Read this article for me: https://techcrunch.com/2026/04/ai-breakthrough",
+          "action": "[READ_URL: https://techcrunch.com/2026/04/ai-breakthrough]",
+          "reasoning": "User provided a direct URL. Fetch and read the page content."
+        },
+        {
+          "input": "What is the weather forecast for Dhaka tomorrow?",
+          "action": "[SEARCH: weather forecast Dhaka tomorrow]",
+          "reasoning": "Weather data is real-time and location-specific."
+        },
+        {
+          "input": "Who founded Google and when?",
+          "action": "[SEARCH: Google founders history]",
+          "reasoning": "Historical corporate facts should be retrieved to avoid hallucination."
+        },
+        {
+          "input": "What is the current Prime Minister of the UK?",
+          "action": "[SEARCH: current Prime Minister United Kingdom 2026]",
+          "reasoning": "Political leadership must be verified — governments change."
+        },
+        {
+          "input": "What are the visa requirements for a Bangladeshi citizen to visit Canada?",
+          "action": "[SEARCH: Canada visa requirements Bangladesh citizens 2026]",
+          "reasoning": "Immigration policy is subject to change and must be looked up."
+        },
+        {
+          "input": "What is the meaning of 'habeas corpus'?",
+          "action": "[SEARCH: definition of habeas corpus]",
+          "reasoning": "Legal terminology requires authoritative sourced definitions."
+        },
+        {
+          "input": "What's trending on Twitter right now?",
+          "action": "[SEARCH: trending topics Twitter today 2026]",
+          "reasoning": "Trending content is ephemeral and requires live lookup."
+        },
+        {
+          "input": "Give me a summary of what's on this page: https://www.bbc.com/news/world",
+          "action": "[READ_URL: https://www.bbc.com/news/world]",
+          "reasoning": "User provided a URL for content retrieval."
+        },
+        {
+          "input": "What company makes the Snapdragon chip?",
+          "action": "[SEARCH: manufacturer of Snapdragon chip]",
+          "reasoning": "Product-to-company attribution should be verified via search."
+        },
+        {
+          "input": "What were the major events in 2025?",
+          "action": "[SEARCH: major world events 2025 summary]",
+          "reasoning": "Year-in-review facts are verifiable and should be retrieved, not guessed."
         }
+      ]
     },
-    "global_rules": {
-        "output_design_protocol": [
-            "Use **bold** for key terms and important words.",
-            "Use Markdown tables for comparisons or structured data.",
-            "Use bullet points for lists instead of paragraphs.",
-            "Keep paragraphs short and punchy (2-3 sentences max).",
-            "Be decisive and authoritative. Remove filler phrases like 'Sure, I can help with that'.",
-            "When presenting search results, always cite the source.",
-            "Use headers (## or ###) to organize long responses."
-        ],
-        "anti_hallucination_rules": [
-            "NEVER guess real-time data (prices, leaders, dates). Always use [SEARCH: ...].",
-            "NEVER apologize repeatedly for tool failures. Fix the issue or use alternate tools.",
-            "If a Python script fails with ModuleNotFoundError, immediately use [RUN_SHELL: pip install <module>].",
-            "If you are unsure about ANY fact, use [SEARCH: ...] to verify before responding.",
-            "NEVER say 'I cannot do that'. Use the available tools to find a solution."
-        ],
-        "loop_prevention": [
-            "Maximum 3 tool attempts per query before giving the best available answer.",
-            "If a tool fails twice, try an alternative approach (e.g., switch from PYTHON to SEARCH).",
-            "Never repeat the same failed action. Adapt and try something different.",
-            "If document reading fails via Python, ALWAYS fall back to [SEARCH_DOC: ...] native tool."
-        ]
+    "CODE": {
+      "description": "Mathematical computation, logic problems, data processing, algorithm implementation, plotting, and Python scripting tasks.",
+      "tools": ["[PYTHON: code]"],
+      "trigger_keywords": [
+        "calculate", "compute", "math", "solve", "equation", "formula",
+        "plot", "graph", "chart", "visualize", "matplotlib", "seaborn",
+        "sort", "filter", "analyze", "process", "parse", "convert",
+        "write a script", "python", "code", "function", "loop", "algorithm",
+        "fibonacci", "prime", "factorial", "sum", "average", "median",
+        "regression", "statistics", "probability", "matrix", "array",
+        "encrypt", "hash", "compress", "decode", "encode",
+        "generate", "simulate", "model", "iterate", "recursive",
+        "csv", "json data", "dataframe", "pandas", "numpy",
+        "count", "percentage", "ratio", "optimize", "binary search"
+      ],
+      "examples": [
+        {
+          "input": "Calculate the factorial of 20.",
+          "action": "[PYTHON: import math; print(math.factorial(20))]",
+          "reasoning": "Pure arithmetic computation — execute via Python."
+        },
+        {
+          "input": "Write a Python script to find all prime numbers up to 1000.",
+          "action": "[PYTHON: primes = [n for n in range(2,1001) if all(n%i!=0 for i in range(2,int(n**0.5)+1))]; print(primes)]",
+          "reasoning": "Algorithmic task — generate and execute Python code."
+        },
+        {
+          "input": "Sort this list of numbers in descending order: [42, 7, 100, 3, 55, 28]",
+          "action": "[PYTHON: nums = [42,7,100,3,55,28]; print(sorted(nums, reverse=True))]",
+          "reasoning": "Data manipulation task — clearly a code execution job."
+        },
+        {
+          "input": "Plot a sine wave using matplotlib.",
+          "action": "[PYTHON: import matplotlib.pyplot as plt; import numpy as np; x=np.linspace(0,2*np.pi,100); plt.plot(x,np.sin(x)); plt.title('Sine Wave'); plt.savefig('sine.png')]",
+          "reasoning": "Visualization task using Python plotting library."
+        },
+        {
+          "input": "What is 25% of 3,840?",
+          "action": "[PYTHON: print(3840 * 0.25)]",
+          "reasoning": "Simple arithmetic — offload to Python for precision."
+        },
+        {
+          "input": "Generate the first 20 Fibonacci numbers.",
+          "action": "[PYTHON: a,b=0,1; fibs=[]; [fibs.append(a) or (a,b).__setitem__(slice(None),(b,a+b)) for _ in range(20)]; print(fibs)]",
+          "reasoning": "Sequence generation task — handled by code execution."
+        },
+        {
+          "input": "Analyze this CSV data and find the average salary.",
+          "action": "[PYTHON: import pandas as pd; df = pd.read_csv('data.csv'); print(df['salary'].mean())]",
+          "reasoning": "Data analysis task requiring pandas execution."
+        },
+        {
+          "input": "Write a function to check if a string is a palindrome.",
+          "action": "[PYTHON: def is_palindrome(s): s=s.lower().replace(' ',''); return s==s[::-1]; print(is_palindrome('racecar'))]",
+          "reasoning": "String logic task — implement and run Python function."
+        },
+        {
+          "input": "Convert 100 Celsius to Fahrenheit.",
+          "action": "[PYTHON: c=100; f=(c*9/5)+32; print(f'{c}C = {f}F')]",
+          "reasoning": "Unit conversion formula — run as Python computation."
+        },
+        {
+          "input": "Simulate rolling two dice 10,000 times and show the frequency of each sum.",
+          "action": "[PYTHON: import random; from collections import Counter; rolls=Counter(random.randint(1,6)+random.randint(1,6) for _ in range(10000)); print(dict(sorted(rolls.items())))]",
+          "reasoning": "Statistical simulation task — requires code execution."
+        }
+      ]
+    },
+    "DOCS": {
+      "description": "Reading, summarizing, extracting, and analyzing content from uploaded files such as PDFs, TXT documents, Word files, CSV data files, and Markdown documents.",
+      "tools": ["[SEARCH_DOC: query]"],
+      "trigger_keywords": [
+        "my file", "uploaded file", "this document", "the pdf", "the report",
+        "read my", "summarize my", "analyze my", "review my",
+        "resume", "CV", "contract", "invoice", "proposal", "thesis",
+        "extract from", "find in the document", "what does the file say",
+        "key points", "main topics", "highlights", "overview",
+        "search the doc", "look in the file", "from the document",
+        "table of contents", "chapter", "section", "paragraph",
+        "attached file", "uploaded pdf", "my report", "my notes",
+        "transcript", "meeting notes", "letter", "legal document",
+        "business plan", "financial statement", "policy", "manual"
+      ],
+      "examples": [
+        {
+          "input": "Summarize the uploaded PDF report for me.",
+          "action": "[SEARCH_DOC: summary of main findings and conclusions]",
+          "reasoning": "User wants a summary of an uploaded document — use doc search tool."
+        },
+        {
+          "input": "What are the key points in my resume?",
+          "action": "[SEARCH_DOC: key skills experience and education in resume]",
+          "reasoning": "Resume is an uploaded file — extract structured info from it."
+        },
+        {
+          "input": "Find any mention of 'liability' in my contract.",
+          "action": "[SEARCH_DOC: liability clauses in contract]",
+          "reasoning": "Keyword extraction from an uploaded legal document."
+        },
+        {
+          "input": "What is the total budget mentioned in my business proposal?",
+          "action": "[SEARCH_DOC: total budget financial figures business proposal]",
+          "reasoning": "Financial detail extraction from an uploaded file."
+        },
+        {
+          "input": "Give me the table of contents from this uploaded thesis.",
+          "action": "[SEARCH_DOC: table of contents chapters thesis]",
+          "reasoning": "Structural overview request from an uploaded academic document."
+        },
+        {
+          "input": "What recommendations does the report make?",
+          "action": "[SEARCH_DOC: recommendations conclusions suggestions report]",
+          "reasoning": "User wants actionable insights extracted from an uploaded report."
+        },
+        {
+          "input": "Does my uploaded invoice mention a due date?",
+          "action": "[SEARCH_DOC: due date payment terms invoice]",
+          "reasoning": "Targeted fact extraction from an uploaded financial document."
+        },
+        {
+          "input": "Analyze the methodology section of my research paper.",
+          "action": "[SEARCH_DOC: methodology research methods data collection]",
+          "reasoning": "Section-specific extraction from an uploaded academic paper."
+        },
+        {
+          "input": "What skills are listed in my CV?",
+          "action": "[SEARCH_DOC: skills competencies listed in CV]",
+          "reasoning": "Structured info extraction from an uploaded CV document."
+        },
+        {
+          "input": "Translate the main ideas from my uploaded French document into English.",
+          "action": "[SEARCH_DOC: main ideas and topics from document]",
+          "reasoning": "Doc retrieval then translation — first step is always to retrieve the content."
+        }
+      ]
+    },
+    "SYSTEM": {
+      "description": "Operating system commands, package installation, file and directory management, environment configuration, process management, and system-level troubleshooting.",
+      "tools": ["[RUN_SHELL: command]"],
+      "trigger_keywords": [
+        "install", "pip install", "npm install", "apt install", "brew install",
+        "run command", "terminal", "shell", "bash", "cmd", "powershell",
+        "mkdir", "create folder", "create directory", "delete file", "remove file",
+        "move file", "copy file", "rename", "chmod", "chown",
+        "ipconfig", "ifconfig", "ping", "netstat", "traceroute",
+        "list files", "ls", "dir", "find files", "search files",
+        "ModuleNotFoundError", "command not found", "package missing",
+        "update packages", "upgrade", "uninstall", "requirements.txt",
+        "environment variable", "PATH", "export", "set variable",
+        "kill process", "task manager", "ps aux", "top", "htop",
+        "disk usage", "df -h", "du -sh", "free memory", "check RAM",
+        "compress", "zip", "unzip", "tar", "extract archive",
+        "ssh", "scp", "ftp", "server", "port", "firewall", "open port"
+      ],
+      "examples": [
+        {
+          "input": "Install the requests library in Python.",
+          "action": "[RUN_SHELL: pip install requests]",
+          "reasoning": "Package installation is a shell command task."
+        },
+        {
+          "input": "I'm getting a ModuleNotFoundError for 'pandas'. How do I fix it?",
+          "action": "[RUN_SHELL: pip install pandas]",
+          "reasoning": "ModuleNotFoundError always maps to pip install of the missing module."
+        },
+        {
+          "input": "Create a new folder called 'projects' on my Desktop.",
+          "action": "[RUN_SHELL: mkdir ~/Desktop/projects]",
+          "reasoning": "Directory creation is a shell/OS command task."
+        },
+        {
+          "input": "What is my computer's IP address?",
+          "action": "[RUN_SHELL: ipconfig]",
+          "reasoning": "Network configuration retrieval requires a system shell command."
+        },
+        {
+          "input": "List all files in my current directory.",
+          "action": "[RUN_SHELL: ls -la]",
+          "reasoning": "Directory listing is a standard shell operation."
+        },
+        {
+          "input": "Delete a file called 'old_report.txt' from my downloads folder.",
+          "action": "[RUN_SHELL: rm ~/Downloads/old_report.txt]",
+          "reasoning": "File deletion is a system-level shell command."
+        },
+        {
+          "input": "Check how much free disk space I have.",
+          "action": "[RUN_SHELL: df -h]",
+          "reasoning": "Disk usage is a system diagnostic shell command."
+        },
+        {
+          "input": "Install all dependencies from requirements.txt.",
+          "action": "[RUN_SHELL: pip install -r requirements.txt]",
+          "reasoning": "Batch package installation from a file — system shell command."
+        },
+        {
+          "input": "Zip the folder 'my_project' into an archive.",
+          "action": "[RUN_SHELL: zip -r my_project.zip my_project/]",
+          "reasoning": "File compression is a system-level operation."
+        },
+        {
+          "input": "Show me all running processes on my system.",
+          "action": "[RUN_SHELL: ps aux]",
+          "reasoning": "Process management is a shell/OS command task."
+        },
+        {
+          "input": "Ping google.com to check if my internet is working.",
+          "action": "[RUN_SHELL: ping -c 4 google.com]",
+          "reasoning": "Network connectivity check requires a shell command."
+        },
+        {
+          "input": "Rename the file 'draft.txt' to 'final.txt'.",
+          "action": "[RUN_SHELL: mv draft.txt final.txt]",
+          "reasoning": "File renaming is handled by the shell's move command."
+        }
+      ]
+    },
+    "GENERAL": {
+      "description": "Casual greetings, conversational exchanges, creative writing, memory saving, personal preferences, opinions, and tasks that do not require external tools or computation.",
+      "tools": ["[MEM_SAVE: fact]"],
+      "trigger_keywords": [
+        "hello", "hi", "hey", "good morning", "good evening", "how are you",
+        "what's your name", "who are you", "tell me about yourself",
+        "remember", "save this", "note that", "don't forget", "keep in mind",
+        "my name is", "I prefer", "I like", "I work at", "I am from",
+        "write a poem", "tell me a joke", "story", "creative writing",
+        "explain", "describe", "what do you think", "your opinion",
+        "motivate me", "advice", "tips", "suggestions", "recommend",
+        "what should I do", "help me decide", "brainstorm", "ideas",
+        "thank you", "thanks", "goodbye", "see you", "nice talking",
+        "chat", "talk", "conversation", "I feel", "I need help with",
+        "make a list", "pros and cons", "compare", "difference between"
+      ],
+      "self_correction_rule": "If the AI is about to state a current fact (price, leader, event) from memory without searching, it MUST stop and reroute to RESEARCH. GENERAL is only for truly timeless, opinion-based, or memory-save tasks.",
+      "examples": [
+        {
+          "input": "Hello! How are you today?",
+          "action": "Respond conversationally. No tool needed.",
+          "reasoning": "Simple greeting — pure conversational response."
+        },
+        {
+          "input": "My name is Arif. Please remember that.",
+          "action": "[MEM_SAVE: User's name is Arif]",
+          "reasoning": "User wants a personal fact stored for future reference."
+        },
+        {
+          "input": "I prefer dark mode interfaces. Remember this.",
+          "action": "[MEM_SAVE: User prefers dark mode interfaces]",
+          "reasoning": "User preference to be saved for personalization."
+        },
+        {
+          "input": "Write me a short poem about the ocean.",
+          "action": "Generate a creative poem using internal language capabilities. No tool needed.",
+          "reasoning": "Creative writing task — no external tool required."
+        },
+        {
+          "input": "Tell me a joke about programmers.",
+          "action": "Generate a programmer joke conversationally. No tool needed.",
+          "reasoning": "Humor/entertainment — purely conversational, no tool needed."
+        },
+        {
+          "input": "What are some tips for staying productive while working from home?",
+          "action": "Provide general productivity advice conversationally. No tool needed.",
+          "reasoning": "General advice task — no real-time data required."
+        },
+        {
+          "input": "I work at Nexus Technologies as a data engineer. Save this.",
+          "action": "[MEM_SAVE: User works at Nexus Technologies as a data engineer]",
+          "reasoning": "Professional information to be stored in memory."
+        },
+        {
+          "input": "Brainstorm 5 names for a new AI startup.",
+          "action": "Generate creative name suggestions conversationally. No tool needed.",
+          "reasoning": "Creative brainstorming — internal language generation, no tool."
+        },
+        {
+          "input": "What's the difference between empathy and sympathy?",
+          "action": "Explain conceptually using internal knowledge. No tool needed.",
+          "reasoning": "Timeless conceptual distinction — no live data or computation needed."
+        },
+        {
+          "input": "I live in Dhaka, Bangladesh. Please remember this for location-based queries.",
+          "action": "[MEM_SAVE: User is located in Dhaka, Bangladesh]",
+          "reasoning": "User explicitly requests location to be stored in memory."
+        }
+      ]
     }
+  },
+  "global_rules": {
+    "output_design_protocol": [
+      "Always use **bold** for key terms, tool names, and important labels in responses.",
+      "Use markdown tables to present structured comparisons, tool trigger mappings, or multi-column data.",
+      "Use bullet points for lists of 3 or more items; avoid bullet points for single items.",
+      "Prefix tool invocations clearly in the format [TOOL_NAME: argument] with no deviation.",
+      "When displaying code, always wrap it in triple backtick fenced blocks with a language identifier.",
+      "Use H2 and H3 headings to section long responses. Never use H1 inside chat responses.",
+      "Keep responses concise — lead with the action/answer, then explain if needed.",
+      "Highlight warnings or important notes using > blockquote formatting."
+    ],
+    "anti_hallucination_rules": [
+      "NEVER state current facts (prices, people in roles, dates, events) from memory alone — always trigger [SEARCH: query].",
+      "NEVER guess the output of code — always execute via [PYTHON: code].",
+      "NEVER fabricate file contents — always retrieve via [SEARCH_DOC: query].",
+      "NEVER assume a package is installed — always use [RUN_SHELL: pip install X] when a ModuleNotFoundError is encountered.",
+      "If unsure which route applies, default to RESEARCH over GENERAL to avoid hallucination.",
+      "Self-audit rule: before every factual claim, ask 'Is this a live/current fact?' — if yes, search first.",
+      "Dates beyond the training cutoff MUST always trigger a web search.",
+      "Attribution rule: if you cite a statistic, always include the source from search results."
+    ],
+    "loop_prevention": [
+      "If a tool call returns no result after the first attempt, rephrase the query and retry once.",
+      "If a tool fails twice, inform the user of the failure and ask for clarification or an alternative approach.",
+      "If [SEARCH] returns irrelevant results, try a more specific query. Maximum 3 search attempts per query intent.",
+      "If [PYTHON] execution fails, diagnose the error message, correct the code, and retry once.",
+      "If [SEARCH_DOC] returns no results, notify the user that the document may not be uploaded or the query needs refinement.",
+      "If [RUN_SHELL] returns a permission error, suggest running with elevated privileges (sudo) and explain the risks.",
+      "Never enter an infinite loop of tool calls — after 3 failed attempts at any tool, halt and report to the user.",
+      "Circuit breaker rule: if the same tool is called with the same argument twice with no new result, stop and ask the user for more information."
+    ]
+  },
+  "metadata": {
+    "total_examples": 62,
+    "category_breakdown": {
+      "RESEARCH": 20,
+      "CODE": 10,
+      "DOCS": 10,
+      "SYSTEM": 12,
+      "GENERAL": 10
+    },
+    "created_for": "Nexus Swarm Router AI Agent",
+    "dataset_purpose": "Training an AI routing brain to select the correct tool and action format based on user intent.",
+    "format_version": "JSON v1.0",
+    "date_generated": "2026"
+  }
 }
