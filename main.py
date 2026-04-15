@@ -1,4 +1,5 @@
 import json
+import platform
 import re
 import sqlite3
 import os
@@ -23,6 +24,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 try:
     chroma_client = chromadb.PersistentClient(path="memory_db_vectors")
     docs_collection = chroma_client.get_or_create_collection(name="local_docs")
+    memory_collection = chroma_client.get_or_create_collection(name="long_term_memory")
 except Exception as e:
     print(f"ChromaDB Init Error: {e}. Document search will be unavailable.")
 
@@ -104,41 +106,31 @@ def search_docs(query):
     except Exception as e:
         return f"Document search failed: {str(e)}"
 
-# --- MEMORY DATABASE SETUP ---
-DB_PATH = "memory.db"
-def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fact TEXT NOT NULL UNIQUE
-            )
-        ''')
-        conn.commit()
-
-init_db()
+import time
 
 def save_memory(fact):
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT OR IGNORE INTO memory (fact) VALUES (?)", (fact.strip(),))
-            conn.commit()
-            return True
+        memory_collection.add(
+            documents=[fact.strip()],
+            metadatas=[{"timestamp": time.time()}],
+            ids=[f"mem_{uuid.uuid4().hex[:8]}"]
+        )
+        return True
     except Exception as e:
-        print(f"DB Error: {e}")
+        print(f"Memory DB Error: {e}")
         return False
 
-def get_memories():
+def retrieve_relevant_memories(query_text):
     try:
-        with sqlite3.connect(DB_PATH) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT fact FROM memory")
-            rows = cursor.fetchall()
-            if rows:
-                return [row[0] for row in rows[-20:]]
+        if memory_collection.count() == 0:
             return []
+        results = memory_collection.query(
+            query_texts=[query_text],
+            n_results=5
+        )
+        if results and results['documents'] and results['documents'][0]:
+            return results['documents'][0]
+        return []
     except:
         return []
 
@@ -214,13 +206,32 @@ def execute_python(code_str):
     finally:
         sys.stdout = old_stdout
 
+# --- LOCAL SYSTEM SHELL EXECUTION ---
+import subprocess
+def execute_shell(command):
+    try:
+        # Detect OS for cross-platform support
+        is_windows = platform.system() == "Windows"
+        shell_cmd = ["powershell", "-Command", command] if is_windows else ["/bin/bash", "-c", command]
+        
+        result = subprocess.run(shell_cmd, capture_output=True, text=True, timeout=60)
+        output = result.stdout
+        if result.stderr:
+            output += f"\nErrors:\n{result.stderr}"
+        return output if output.strip() else "Command executed successfully with no output."
+    except Exception as e:
+        return f"Shell Execution Error: {str(e)}"
+
 # --- AGENTIC LOOP AND PARSER ---
 def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True):
     if tools_enabled:
-        memories = get_memories()
-        if memories:
-            memo_block = "User's saved long-term memories:\n" + "\n".join([f"- {m}" for m in memories])
-            messages.insert(0, {"role": "system", "content": memo_block})
+        user_msgs = [m["content"] for m in messages if m["role"] == "user"]
+        if user_msgs:
+            last_query = user_msgs[-1]
+            memories = retrieve_relevant_memories(last_query)
+            if memories:
+                memo_block = "User's relevant long-term memories regarding this context:\n" + "\n".join([f"- {m}" for m in memories])
+                messages.insert(0, {"role": "system", "content": memo_block})
 
     def ollama_stream(msgs):
         try:
@@ -248,6 +259,67 @@ def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True):
 
     def generate():
         current_run_msgs = list(messages)
+        
+        # --- ROUTER AGENT LOGIC ---
+        if tools_enabled:
+            yield json.dumps({"type": "status", "text": "🧠 Router Agent analyzing intent..."}) + "\n"
+            
+            user_msgs = [m["content"] for m in current_run_msgs if m["role"] == "user"]
+            last_msg = user_msgs[-1] if user_msgs else "General query"
+                
+            router_prompt = f"""You are a routing agent. Read the user's message.
+Categorize the request into EXACTLY ONE of these strings based on what it needs:
+[ROUTE: RESEARCH] - Requires searching the internet or reading URLs to get current info.
+[ROUTE: CODE] - Requires mathematical calculation, logic, data analysis, or executing python code.
+[ROUTE: DOCS] - Requires searching uploaded documents.
+[ROUTE: SYSTEM] - Requires executing local system shell commands (like powershell), managing files, or getting OS info.
+[ROUTE: GENERAL] - General conversation or simple memory saving.
+
+User Message: {last_msg}
+
+Output ONLY the exact category string and nothing else. Example: [ROUTE: GENERAL]"""
+
+            try:
+                router_res = requests.post(API_URL, json={
+                    "model": target_model, 
+                    "messages": [{"role": "user", "content": router_prompt}], 
+                    "stream": False
+                }, timeout=10)
+                router_data = router_res.json()
+                route_text = router_data.get("message", {}).get("content", "").strip()
+            except Exception as e:
+                route_text = "[ROUTE: GENERAL]" # fallback
+                
+            if "[ROUTE: RESEARCH]" in route_text:
+                cat = "RESEARCH"
+                icon = "🔍 Explorer Node"
+                tool_instructions = "You are the Explorer Node. You MUST use these tools if necessary:\nTo search the web: [SEARCH: query]\nTo read an article: [READ_URL: url]\nOutput only one tool per response."
+            elif "[ROUTE: CODE]" in route_text:
+                cat = "CODE"
+                icon = "🤖 Coder Node"
+                tool_instructions = "You are the Coder Node. You MUST use this tool to calculate or analyze:\nTo run python code: [PYTHON: print('hello')]\nOutput only one tool per response."
+            elif "[ROUTE: DOCS]" in route_text:
+                cat = "DOCS"
+                icon = "📚 Document Search Node"
+                tool_instructions = "You are the Document Node. You MUST use this tool to answer file questions:\nTo search documents: [SEARCH_DOC: query]\nOutput only one tool per response."
+            elif "[ROUTE: SYSTEM]" in route_text:
+                cat = "SYSTEM"
+                icon = "💻 Administrator Node"
+                os_type = "powershell" if platform.system() == "Windows" else "bash"
+                tool_instructions = f"You are the System Administrator Node. You MUST use this tool to manage the computer natively:\nTo run {os_type} commands: [RUN_SHELL: ping google.com]\nWait for the user's explicit permission. Output only one tool per response."
+            else:
+                cat = "GENERAL"
+                icon = "🧠 General Node"
+                tool_instructions = "You are the General Node. You MUST use this tool if explicitly asked to remember something:\nTo save memory: [MEM_SAVE: fact]\nOutput only one tool per response."
+                
+            yield json.dumps({"type": "status", "text": f"🔀 Task delegated to: {icon}"}) + "\n"
+            
+            # Inject dynamic sub-agent instructions safely into system prompt
+            if len(current_run_msgs) > 0 and current_run_msgs[0]["role"] == "system":
+                current_run_msgs[0]["content"] += "\n\n" + tool_instructions
+            else:
+                current_run_msgs.insert(0, {"role": "system", "content": tool_instructions})
+        
         loop_count = 0
         max_loops = 3
 
@@ -266,6 +338,7 @@ def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True):
                     doc_search_match = re.search(r'\[SEARCH_DOC:\s*(.*?)\]', buffer)
                     read_url_match = re.search(r'\[READ_URL:\s*(.*?)\]', buffer)
                     python_match = re.search(r'\[PYTHON:\s*(.*?)\n?\]', buffer, re.DOTALL)
+                    shell_match = re.search(r'\[RUN_SHELL:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     
                     if search_match:
                         query = search_match.group(1).strip()
@@ -320,9 +393,15 @@ def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True):
                         current_run_msgs.append({"role": "user", "content": f"System Notice: Python Execution Output (stdout/stderr):\n{tool_result}\n\nUse this information to answer the initial query."})
                         tool_triggered = True
                         break
+
+                    elif shell_match:
+                        code = shell_match.group(1).strip()
+                        yield json.dumps({"type": "action_request", "action": "RUN_SHELL", "command": code}) + "\n"
+                        # Terminate the stream explicitly. The frontend will pick up execution.
+                        break
                     
                     if len(buffer) > 60:
-                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON):', buffer):
+                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL):', buffer):
                             if len(buffer) > 5000: # safety bailout
                                 yield json.dumps({"type": "content", "text": buffer}) + "\n"
                                 buffer = ""
@@ -343,7 +422,7 @@ def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True):
                 continue
             else:
                 if buffer:
-                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON).*$', '', buffer, flags=re.DOTALL)
+                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL).*$', '', buffer, flags=re.DOTALL)
                     if clean_buf:
                         yield json.dumps({"type": "content", "text": clean_buf}) + "\n"
                 break
@@ -365,6 +444,16 @@ def get_models():
         return {"models": models}
     except Exception as e:
         return {"error": str(e)}, 500
+
+@app.route("/execute_shell", methods=["POST"])
+def run_shell():
+    data = request.json or {}
+    command = data.get("command", "")
+    if not command:
+        return {"error": "No command provided"}, 400
+    
+    output = execute_shell(command)
+    return {"output": output}
 
 @app.route("/chat", methods=["POST"])
 def chat():

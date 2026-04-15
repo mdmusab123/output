@@ -272,13 +272,38 @@
             chats.forEach(chat => {
                 const item = document.createElement('div');
                 const active = chat.id === currentChatId;
-                item.className = `p-3 rounded-xl text-sm cursor-pointer truncate transition-all mb-1 font-medium ${
+                item.className = `p-3 rounded-xl text-sm transition-all mb-1 font-medium flex justify-between items-center group ${
                     active ? 'bg-white/10 text-white shadow-sm border border-white/5' : 'hover:bg-white/5 text-zinc-400 border border-transparent'
                 }`;
-                item.innerText = chat.title;
-                item.onclick = () => loadChat(chat.id);
+                
+                const titleSpan = document.createElement('span');
+                titleSpan.className = "truncate cursor-pointer flex-1";
+                titleSpan.innerText = chat.title;
+                titleSpan.onclick = () => loadChat(chat.id);
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = "opacity-0 group-hover:opacity-100 p-1.5 hover:bg-white/10 rounded-md text-zinc-500 hover:text-red-400 transition-all ml-2";
+                deleteBtn.innerHTML = `<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+                deleteBtn.title = "Delete Chat";
+                deleteBtn.onclick = (e) => deleteChat(e, chat.id);
+                
+                item.appendChild(titleSpan);
+                item.appendChild(deleteBtn);
                 chatListEl.appendChild(item);
             });
+        }
+
+        function deleteChat(e, id) {
+            e.stopPropagation();
+            chats = chats.filter(c => c.id !== id);
+            saveState();
+            if (chats.length === 0) {
+                startNewChat();
+            } else if (currentChatId === id) {
+                loadChat(chats[0].id);
+            } else {
+                renderSidebar();
+            }
         }
 
         function createStatusBadge(text, iconStr) {
@@ -339,12 +364,14 @@
             chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
         }
 
-        async function sendMessage() {
-            const text = inputEl.value.trim();
-            if ((!text && stagedFiles.length === 0 && stagedImages.length === 0) || sendBtn.disabled) return;
+        async function sendMessage(hiddenText = null) {
+            const text = hiddenText || inputEl.value.trim();
+            if (!text && stagedFiles.length === 0 && stagedImages.length === 0 && !hiddenText) return;
 
-            inputEl.value = "";
-            inputEl.style.height = "auto";
+            if (!hiddenText) {
+                inputEl.value = "";
+                inputEl.style.height = "auto";
+            }
             inputEl.disabled = true;
             sendBtn.disabled = true;
 
@@ -374,15 +401,18 @@
                 userDisplayMsg += "*Sent attachments without prompt.*";
             }
 
-            appendMessage("user", userDisplayMsg);
-            
-            // Push actual system context history (hidden to user)
-            let msgObj = { role: "user", content: injectionNotice + text };
-            if (stagedImages.length > 0) {
-                msgObj.images = [...stagedImages];
-                stagedImages = []; // Clear images
+            if (!hiddenText) {
+                appendMessage("user", userDisplayMsg);
+                // Push actual system context history (hidden to user)
+                let msgObj = { role: "user", content: injectionNotice + text };
+                if (stagedImages.length > 0) {
+                    msgObj.images = [...stagedImages];
+                    stagedImages = []; // Clear images
+                }
+                messageHistory.push(msgObj);
+            } else {
+                messageHistory.push({ role: "user", content: hiddenText });
             }
-            messageHistory.push(msgObj);
 
             const aiMsgDiv = appendMessage("ai", "...");
             const contentArea = aiMsgDiv.querySelector('.content-area');
@@ -393,13 +423,7 @@
                 let sPrompt = systemPrompt;
                 if (!sPrompt) sPrompt = "You are Nexus, a highly capable AI assistant.";
                 if (toolsEnabled) {
-                    sPrompt += `\nYou have tools enabled.
-To search the web, output exactly: [SEARCH: query] 
-To read the full text of an article or website, output exactly: [READ_URL: https://...]
-To save memory, output exactly: [MEM_SAVE: fact]
-To search within uploaded user documents, output exactly: [SEARCH_DOC: query]
-To run python code to solve math or analyze data, output exactly: [PYTHON: print("hello")]
-Only output one tool per response. Tools are executed and results are sent back.`;
+                    sPrompt += `\n(Background Router Node sequence initiated. Await sub-agent instructions.)`;
                 }
 
                 let fullHistory = [{ role: "system", content: sPrompt }];
@@ -435,6 +459,23 @@ Only output one tool per response. Tools are executed and results are sent back.
                                 accumulatedContent += data.text;
                                 contentArea.innerHTML = formatMarkdown(accumulatedContent);
                                 scrollToBottom();
+                            } else if (data.type === 'action_request') {
+                                const actionId = Date.now().toString();
+                                const shellCode = data.command.replace(/'/g, "&apos;").replace(/"/g, "&quot;");
+                                const actionHTML = `
+                                <div class="mt-4 p-4 bg-orange-500/10 border border-orange-500/30 rounded-xl" id="action-${actionId}">
+                                    <div class="flex items-center gap-2 text-orange-400 font-bold mb-2">
+                                        ⚠️ Permission Required: Target System Execution
+                                    </div>
+                                    <div class="text-sm text-zinc-300 mb-3">The Administrator Node is requesting execution rights for this shell payload:</div>
+                                    <pre class="bg-black/40 p-3 rounded-lg text-xs font-mono text-zinc-300 mb-3 overflow-x-auto"><code>${shellCode}</code></pre>
+                                    <div class="flex gap-3">
+                                        <button onclick="approveShellAction('${actionId}', '${shellCode}')" class="flex-1 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 py-2 rounded-lg text-sm font-semibold transition-colors duration-200 border border-orange-500/30">✓ Approve & Run</button>
+                                        <button onclick="denyShellAction('${actionId}')" class="flex-1 bg-white/5 hover:bg-white/10 text-zinc-400 py-2 rounded-lg text-sm font-semibold transition-colors duration-200 border border-white/10">✗ Deny</button>
+                                    </div>
+                                </div>`;
+                                contentArea.insertAdjacentHTML('beforeend', actionHTML);
+                                scrollToBottom();
                             }
                         } catch(e) {
                             // In case of fragmented JSON, append as text (fallback)
@@ -462,12 +503,36 @@ Only output one tool per response. Tools are executed and results are sent back.
             } finally {
                 inputEl.disabled = false;
                 sendBtn.disabled = false;
-                inputEl.focus();
+                if (!hiddenText) inputEl.focus();
                 
                 document.querySelectorAll('.prose pre code').forEach((block) => {
                     hljs.highlightElement(block);
                 });
             }
+        }
+
+        async function approveShellAction(id, command) {
+            document.getElementById(`action-${id}`).innerHTML = '<div class="text-orange-400 font-bold text-sm">⚙️ Executing... please wait.</div>';
+            try {
+                const res = await fetch('/execute_shell', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: command })
+                });
+                const data = await res.json();
+                document.getElementById(`action-${id}`).style.display = 'none';
+                
+                const hiddenPrompt = `System Notice: The user explicitly APPROVED and executed the shell command: \`${command}\`\n\nTerminal Output:\n${data.output}\n\nPlease read these logs and tell the user the result in a conversational tone.`;
+                sendMessage(hiddenPrompt);
+            } catch(e) {
+                document.getElementById(`action-${id}`).innerHTML = `<div class="text-red-400 font-bold text-sm">⚠️ Execution failed: ${e.message}</div>`;
+            }
+        }
+        
+        function denyShellAction(id) {
+            document.getElementById(`action-${id}`).style.display = 'none';
+            const hiddenPrompt = `System Notice: The user DENIED the authorization to run the shell command. Apologize and find another way.`;
+            sendMessage(hiddenPrompt);
         }
 
         async function handleFileUpload(event) {
