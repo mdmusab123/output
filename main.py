@@ -181,7 +181,7 @@ def chat():
     return Response(stream_with_context(ask_ai_stream(messages, tools_enabled)), mimetype='application/x-ndjson')
 
 if __name__ == "__main__":
-    # ngrok.set_auth_token("1xaBGSEtDnlLgIK663nvwSaOiRq_Vgj6aPE1FDxgpk9dh2MR")
+    ngrok.set_auth_token("1xaBGSEtDnlLgIK663nvwSaOiRq_Vgj6aPE1FDxgpk9dh2MR")
     
     try:
         public_url = ngrok.connect(5001).public_url
