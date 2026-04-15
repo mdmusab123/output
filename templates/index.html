@@ -507,9 +507,13 @@
 
         function createStatusBadge(text, iconStr) {
             return `
-                <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-teal-500/8 border border-teal-500/15 text-teal-300 text-xs font-medium mb-2 anim-slide-in">
-                    ${iconStr || '<div class="status-dot"></div>'}
-                    ${text}
+                <div class="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-teal-500/8 border border-teal-500/15 text-teal-300 text-[11px] font-semibold mb-2 anim-slide-in shadow-sm">
+                    <div class="dot-typing !p-0 !gap-1">
+                        <div class="dot !w-1 !h-1"></div>
+                        <div class="dot !w-1 !h-1"></div>
+                        <div class="dot !w-1 !h-1"></div>
+                    </div>
+                    <span class="ml-1 tracking-wide uppercase">${text}</span>
                 </div>
             `;
         }
@@ -520,7 +524,7 @@
             div.className = "flex gap-3.5 w-full anim-slide-in";
             if (id) div.id = id;
 
-            const isAI = role === 'ai';
+            const isAI = role === 'ai' || role === 'assistant';
             
             let avatar;
             if (isAI) {

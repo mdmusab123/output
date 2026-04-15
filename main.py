@@ -264,29 +264,32 @@ def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True, router_enabl
         if tools_enabled:
             if not router_enabled:
                 os_type = "powershell" if platform.system() == "Windows" else "bash"
-                tool_instructions = f"""You have tools enabled. You MUST use one of these tools if requested:
-To search the web: [SEARCH: query]
-To read the full text of an article: [READ_URL: https://...]
-To save memory: [MEM_SAVE: fact]
-To search within uploaded user documents: [SEARCH_DOC: query]
-To run python code: [PYTHON: print("hello")]
-To run {os_type} system commands (WAIT for user permission!): [RUN_SHELL: ping google.com]
-Only output one tool per response."""
+                tool_instructions = f"""You have tools. To use a tool, you MUST use the EXACT syntax below. Do NOT add conversational filler! You are a machine code generator. To use a tool, output ONLY the bracketed string.
+- Search web: [SEARCH: query]
+- Read url: [READ_URL: https://...]
+- Save memory: [MEM_SAVE: fact]
+- Search docs: [SEARCH_DOC: query]
+- Run python: [PYTHON: print("hello")]
+- Run shell: [RUN_SHELL: command]
+
+Example: If asked to ping google, output exactly and ONLY:
+[RUN_SHELL: ping google.com]"""
             else:
                 user_msgs = [m["content"] for m in current_run_msgs if m["role"] == "user"]
-                last_msg = user_msgs[-1] if user_msgs else "General query"
+                last_msgs = "\n".join([f"- {m}" for m in user_msgs[-3:]]) if user_msgs else "General query"
                     
-                router_prompt = f"""You are a routing agent. Read the user's message.
-Categorize the request into EXACTLY ONE of these strings based on what it needs:
-[ROUTE: RESEARCH] - Requires searching the internet or reading URLs to get current info.
-[ROUTE: CODE] - Requires mathematical calculation, logic, data analysis, or executing python code.
-[ROUTE: DOCS] - Requires searching uploaded documents.
-[ROUTE: SYSTEM] - Requires executing local system shell commands (like powershell), managing files, or getting OS info.
-[ROUTE: GENERAL] - General conversation or simple memory saving.
+                router_prompt = f"""You are a routing agent. Read the user's recent messages to understand the context.
+Categorize the user's LATEST request into EXACTLY ONE of these strings:
+[ROUTE: RESEARCH] - Requires searching the web or reading URLs.
+[ROUTE: CODE] - Requires math, logic, scripting, or python code.
+[ROUTE: DOCS] - Requires searching or reading uploaded documents/PDFs.
+[ROUTE: SYSTEM] - Requires executing local system shell commands.
+[ROUTE: GENERAL] - General conversation or memory saving.
 
-User Message: {last_msg}
+Recent User Messages Context:
+{last_msgs}
 
-Output ONLY the exact category string and nothing else. Example: [ROUTE: GENERAL]"""
+Output ONLY the exact category string for the final request and nothing else. Example: [ROUTE: GENERAL]"""
 
                 if force_web_search:
                     route_text = "[ROUTE: RESEARCH]"
@@ -305,25 +308,28 @@ Output ONLY the exact category string and nothing else. Example: [ROUTE: GENERAL
                 if "[ROUTE: RESEARCH]" in route_text:
                     cat = "RESEARCH"
                     icon = "🔍 Explorer Node"
-                    tool_instructions = "You are the Explorer Node. You MUST use these tools if necessary:\nTo search the web: [SEARCH: query]\nTo read an article: [READ_URL: url]\nOutput only one tool per response."
+                    tool_instructions = "You are the Explorer Node. Do NOT converse. To answer, output EXACTLY AND ONLY this syntax:\n[SEARCH: specific query]\nor\n[READ_URL: https://...]\nDo not output anything else."
                 elif "[ROUTE: CODE]" in route_text:
                     cat = "CODE"
                     icon = "🤖 Coder Node"
-                    tool_instructions = "You are the Coder Node. You MUST use this tool to calculate or analyze:\nTo run python code: [PYTHON: print('hello')]\nOutput only one tool per response."
+                    tool_instructions = "You are the Coder Node. Do NOT converse. To calculate, output EXACTLY AND ONLY this syntax:\n[PYTHON: print('hello')]"
                 elif "[ROUTE: DOCS]" in route_text:
                     cat = "DOCS"
-                    icon = "📚 Document Search Node"
-                    tool_instructions = "You are the Document Node. You MUST use this tool to answer file questions:\nTo search documents: [SEARCH_DOC: query]\nOutput only one tool per response."
+                    icon = "📚 Document Node"
+                    tool_instructions = "You are the Document Node. Do NOT converse. To search attached files, output EXACTLY AND ONLY this syntax:\n[SEARCH_DOC: specific query]"
                 elif "[ROUTE: SYSTEM]" in route_text:
                     cat = "SYSTEM"
-                    icon = "💻 Administrator Node"
+                    icon = "💻 System Node"
                     os_type = "powershell" if platform.system() == "Windows" else "bash"
-                    tool_instructions = f"You are the System Administrator Node. You MUST use this tool to manage the computer natively:\nTo run {os_type} commands: [RUN_SHELL: ping google.com]\nWait for the user's explicit permission. Output only one tool per response."
+                    tool_instructions = f"You are the System Node. Do NOT converse. To control the OS ({os_type}), output EXACTLY AND ONLY this syntax:\n[RUN_SHELL: command name]\nExample:\n[RUN_SHELL: ping google.com]"
                 else:
                     cat = "GENERAL"
                     icon = "🧠 General Node"
-                    tool_instructions = "You are the General Node. You MUST use this tool if explicitly asked to remember something:\nTo save memory: [MEM_SAVE: fact]\nOutput only one tool per response."
+                    tool_instructions = "You are the General Node. If the user asks you to remember, save, or note down a fact, you MUST output ONLY this syntax:\n[MEM_SAVE: fact here]\nDo NOT converse if saving memory. Otherwise, converse normally."
                 
+                # --- NEW: UI Feedback for active Node ---
+                yield json.dumps({"type": "status", "text": icon}) + "\n"
+
             # Inject dynamic sub-agent instructions safely into system prompt
             if len(current_run_msgs) > 0 and current_run_msgs[0]["role"] == "system":
                 current_run_msgs[0]["content"] += "\n\n" + tool_instructions
