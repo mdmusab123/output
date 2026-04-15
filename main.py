@@ -24,6 +24,8 @@ TAVILY_API_KEY = "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"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(TOOLS_FOLDER, exist_ok=True)
+CHARTS_FOLDER = "charts"
+os.makedirs(CHARTS_FOLDER, exist_ok=True)
 
 # --- INSTRUCTION DATASET (Brain Manual) ---
 INSTRUCTION_DATASET = {}
@@ -472,11 +474,13 @@ Example: If asked to ping google, output exactly and ONLY:
                 doc_keywords = list(set(["read the file", "pdf", "document", "uploaded", "resume", "my file", "the report"] + ds_docs_kw))
                 last_user_msg = user_msgs[-1].lower() if user_msgs else ""
                 
+                data_keywords = ["csv", "excel", "xlsx", "spreadsheet", "dataset", "data analysis", "chart", "plot", "graph", "revenue", "sales", "statistics", "insights from", "visualize", "correlation", "monthly", "trend"]
                 analysis_keywords = ["scan", "analyze", "analyse", "your code", "your codebase", "your own", "your files", "review your", "optimize yourself", "security flaw", "find bug", "redundant", "refactor", "self-analysis", "inspect"]
                 nudge_research = any(kw in last_user_msg for kw in current_event_keywords)
                 nudge_system = any(kw in last_user_msg for kw in system_keywords)
                 nudge_docs = "has attached the following document" in last_user_msg or any(kw in last_user_msg for kw in doc_keywords)
                 nudge_analysis = any(kw in last_user_msg for kw in analysis_keywords)
+                nudge_data = any(kw in last_user_msg for kw in data_keywords)
                     
                 # Build few-shot examples for the router from the instruction dataset
                 research_examples = get_route_examples("RESEARCH", 3)
@@ -504,12 +508,14 @@ Categorize the user's LATEST request into EXACTLY ONE of these strings:
 [ROUTE: DOCS] - Use for searching or reading uploaded documents/PDFS.
 [ROUTE: SYSTEM] - Use for executing local system shell commands (e.g. installing pip packages).
 [ROUTE: ANALYSIS] - Use when the user asks to scan, review, optimize, or analyze the AI's own code/codebase.
+[ROUTE: DATA] - Use when the user uploads or mentions a CSV/Excel file, asks for charts, plots, statistics, or data insights.
 [ROUTE: GENERAL] - Use for general conversation only IF you are 100% sure the answer doesn't need live data.
 
 IMPORTANT: If the user asks about anything CURRENT (leaders, dates, news, status), you MUST choose [ROUTE: RESEARCH].
 IMPORTANT: If a Python script previously failed due to a missing module/library, or if the user asks to install/download something, you MUST choose [ROUTE: SYSTEM].
 IMPORTANT: If the user uploaded a document and asks you to read or summarize it, you MUST choose [ROUTE: DOCS].
 IMPORTANT: If the user asks to scan, review, or analyze the AI's own code or source files, you MUST choose [ROUTE: ANALYSIS].
+IMPORTANT: If the user mentions CSV, Excel, charts, plots, data analysis, or statistics, you MUST choose [ROUTE: DATA].
 {few_shot_block}
 
 Recent User Messages Context:
@@ -525,6 +531,8 @@ Output ONLY the exact category string and nothing else."""
                     route_text = "[ROUTE: DOCS]"
                 elif nudge_analysis:
                     route_text = "[ROUTE: ANALYSIS]"
+                elif nudge_data:
+                    route_text = "[ROUTE: DATA]"
                 else:
                     try:
                         router_res = requests.post(API_URL, json={
@@ -564,6 +572,19 @@ Output ONLY the exact category string and nothing else."""
                     cat = "CODE"
                     icon = "🤖 Coder Node"
                     tool_instructions = "You are the Coder Node. Do NOT converse. To calculate, output EXACTLY AND ONLY this syntax:\n[PYTHON: print('hello')]"
+                elif "[ROUTE: DATA]" in route_text:
+                    cat = "DATA"
+                    icon = "📊 Data Agent"
+                    tool_instructions = (
+                        "You are the Data Analysis Agent. You can analyze CSV/Excel files the user has uploaded.\n"
+                        "To analyze data, output EXACTLY AND ONLY this syntax:\n"
+                        "[ANALYZE_DATA: description of what analysis and chart to generate]\n"
+                        "Examples:\n"
+                        "[ANALYZE_DATA: show revenue by month as a bar chart]\n"
+                        "[ANALYZE_DATA: generate a correlation heatmap of all numeric columns]\n"
+                        "[ANALYZE_DATA: show top 10 rows and summary statistics]\n"
+                        "DO NOT CONVERSE. Output only the bracketed syntax."
+                    )
                 elif "[ROUTE: DOCS]" in route_text:
                     cat = "DOCS"
                     icon = "📚 Document Node"
@@ -623,6 +644,7 @@ Output ONLY the exact category string and nothing else."""
                 buffer += chunk
 
                 if '[' in buffer:
+                    analyze_data_match = re.search(r'\[ANALYZE_DATA:\s*(.*?)\]', buffer)
                     analyze_match = re.search(r'\[ANALYZE_CODE:\s*(.*?)\]', buffer)
                     deep_research_match = re.search(r'\[DEEP_RESEARCH:\s*(.*?)\]', buffer)
                     search_match = re.search(r'\[SEARCH:\s*(.*?)\]', buffer)
@@ -633,7 +655,62 @@ Output ONLY the exact category string and nothing else."""
                     shell_match = re.search(r'\[RUN_SHELL:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     save_tool_match = re.search(r'\[SAVE_TOOL:\s*([^\]]+)\](.*?)\[/SAVE_TOOL\]', buffer, re.DOTALL)
 
-                    if analyze_match:
+                    if analyze_data_match:
+                        instructions = analyze_data_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"📊 Data Agent activated: '{instructions}'"}) + "\n"
+                        # Find the latest uploaded CSV/XLSX
+                        data_file = None
+                        for fname in sorted(os.listdir(UPLOAD_FOLDER), reverse=True):
+                            if fname.endswith(('.csv', '.xlsx', '.xls')):
+                                data_file = os.path.join(UPLOAD_FOLDER, fname)
+                                break
+                        if not data_file:
+                            result_text = "No CSV or Excel file found. Please upload a data file first."
+                        else:
+                            try:
+                                import pandas as pd
+                                import matplotlib
+                                matplotlib.use('Agg')
+                                import matplotlib.pyplot as plt
+                                import io as _io
+
+                                df = pd.read_csv(data_file) if data_file.endswith('.csv') else pd.read_excel(data_file)
+                                yield json.dumps({"type": "status", "text": f"📂 Loaded: {os.path.basename(data_file)} ({df.shape[0]} rows, {df.shape[1]} cols)"}) + "\n"
+
+                                # Build a text summary for the AI
+                                summary = f"File: {os.path.basename(data_file)}\nShape: {df.shape}\nColumns: {list(df.columns)}\n\nData Types:\n{df.dtypes.to_string()}\n\nSummary Stats:\n{df.describe().to_string()}\n\nFirst 5 rows:\n{df.head().to_string()}"
+
+                                # Generate a chart with matplotlib
+                                chart_name = f"chart_{uuid.uuid4().hex[:8]}.png"
+                                chart_path = os.path.join(CHARTS_FOLDER, chart_name)
+                                plt.style.use('dark_background')
+                                fig, ax = plt.subplots(figsize=(10, 5))
+                                numeric_cols = df.select_dtypes(include='number').columns.tolist()
+                                if numeric_cols:
+                                    df[numeric_cols[:3]].plot(ax=ax, kind='bar' if len(df) <= 30 else 'line')
+                                    ax.set_title(instructions[:60], color='white', fontsize=12, pad=10)
+                                    ax.set_facecolor('#1a1a2e')
+                                    fig.patch.set_facecolor('#0c0c0f')
+                                    ax.tick_params(colors='#a1a1aa')
+                                    plt.tight_layout()
+                                    plt.savefig(chart_path, dpi=120, bbox_inches='tight')
+                                    plt.close(fig)
+                                    chart_url = f"/charts/{chart_name}"
+                                    yield json.dumps({"type": "chart", "url": chart_url}) + "\n"
+                                    yield json.dumps({"type": "status", "text": "✅ Chart generated."}) + "\n"
+                                else:
+                                    chart_url = None
+
+                                result_text = summary
+                            except Exception as e:
+                                result_text = f"Data analysis failed: {e}"
+
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Data Analysis Results:\n{result_text}\n\nProvide a comprehensive insight report based on this data. Use markdown tables, bullet points, and highlight key findings."})
+                        tool_triggered = True
+                        break
+
+                    elif analyze_match:
                         focus = analyze_match.group(1).strip()
                         yield json.dumps({"type": "status", "text": f"🧬 Analysis Node activated: '{focus}'"}) + "\n"
                         yield json.dumps({"type": "status", "text": "🗂️ Scanning codebase files..."}) + "\n"
@@ -818,6 +895,11 @@ def chat():
     tavily_key = data.get("tavily_api_key", "") or TAVILY_API_KEY
     
     return Response(stream_with_context(ask_ai_stream(messages, target_model, tools_enabled, router_enabled, force_web_search, thinking_enabled, tavily_key)), mimetype='application/x-ndjson')
+
+@app.route("/charts/<filename>")
+def serve_chart(filename):
+    from flask import send_from_directory
+    return send_from_directory(CHARTS_FOLDER, filename)
 
 @app.route("/memories_graph", methods=["GET"])
 def get_memories_graph():
