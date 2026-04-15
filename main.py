@@ -121,7 +121,7 @@ def ask_ai_stream(messages, tools_enabled=True):
                         tool_result = search_web(query)
                         
                         current_run_msgs.append({"role": "assistant", "content": full_response})
-                        current_run_msgs.append({"role": "system", "content": f"Web Search Result:\n{tool_result}\n\nUse this information to answer the user."})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Web Search Results:\n{tool_result}\n\nUse this information to answer the initial query."})
                         tool_triggered = True
                         break
                         
@@ -132,7 +132,7 @@ def ask_ai_stream(messages, tools_enabled=True):
                         yield json.dumps({"type": "status", "text": f"✅ Memory saved."}) + "\n"
                         
                         current_run_msgs.append({"role": "assistant", "content": full_response})
-                        current_run_msgs.append({"role": "system", "content": f"Memory '{fact}' saved successfully. Acknowledge this."})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Memory '{fact}' saved successfully. Acknowledge this."})
                         tool_triggered = True
                         break
                     
