@@ -7,7 +7,8 @@
     
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.5/dist/purify.min.js"></script>
+    <script src="//unpkg.com/3d-force-graph"></script>
     
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -211,6 +212,14 @@
             <div id="chat-list" class="flex flex-col space-y-0.5"></div>
         </div>
 
+        <!-- Knowledge Map Button -->
+        <div class="px-3 pb-3">
+            <button onclick="toggleKnowledgeMap()" class="w-full flex items-center gap-2.5 p-2.5 rounded-xl text-sm font-bold text-amber-500 bg-amber-500/10 hover:bg-amber-500/20 transition-all border border-amber-500/20 shadow-[0_0_15px_rgba(245,158,11,0.15)]">
+                <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>
+                Nexus Brain Map
+            </button>
+        </div>
+
         <!-- Settings Button -->
         <div class="p-3 border-t border-white/5">
             <button onclick="toggleSettings()" class="flex items-center gap-3 w-full p-2.5 rounded-xl hover:bg-white/5 transition-colors text-sm text-zinc-400 font-medium">
@@ -268,6 +277,20 @@
         </div>
     </div>
 
+    <!-- Knowledge Map Modal -->
+    <div id="knowledge-modal" class="hidden fixed inset-0 bg-[#0c0c0f]/90 backdrop-blur-xl z-[60] flex flex-col items-center justify-center opacity-0 transition-opacity duration-300">
+        <button onclick="toggleKnowledgeMap()" class="absolute top-6 right-8 text-zinc-400 hover:text-white p-2.5 rounded-xl border border-white/10 hover:bg-white/10 transition-all z-[70] bg-black/40 backdrop-blur-md flex items-center gap-2 text-sm font-semibold">
+            <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            Close Map
+        </button>
+        <div class="absolute top-8 left-8 z-[70] pointer-events-none">
+            <h1 class="text-3xl font-display font-bold text-white tracking-tight drop-shadow-lg">Nexus <span class="text-amber-500">Brain</span></h1>
+            <p class="text-zinc-400 font-medium">Interactive 3D Constellation of Memory</p>
+            <p class="text-[11px] text-zinc-500 mt-2 max-w-sm">Drag to rotate, scroll to zoom, hover glowing orbs to read memories.</p>
+        </div>
+        <div id="3d-graph-container" class="w-full h-full cursor-move"></div>
+    </div>
+
     <!-- Settings Modal -->
     <div id="settings-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-md opacity-0 transition-opacity duration-300">
         <div class="bg-[#141418] border border-white/8 rounded-2xl w-full max-w-lg p-6 shadow-2xl shadow-black/60 transform scale-95 transition-transform duration-300">
@@ -289,6 +312,11 @@
                     </select>
                 </div>
                 
+                <div>
+                    <label class="block text-xs font-semibold text-zinc-500 mb-1.5 uppercase tracking-wider">Tavily API Key (Deep Search)</label>
+                    <input type="password" id="tavily-key" class="w-full bg-black/30 text-zinc-200 border border-white/8 rounded-xl p-3 focus:border-teal-500/40 outline-none transition-all text-sm" placeholder="tvly-xxxxxxxxxxxxxxx">
+                </div>
+
                 <!-- Deep Tools Toggle -->
                 <div class="flex items-center justify-between p-3.5 rounded-xl bg-white/[0.02] border border-white/5">
                     <div>
@@ -330,6 +358,7 @@
         let activeModel = localStorage.getItem('ai_model') || 'gemma4:e2b';
         let forceWebSearch = false;
         let thinkingEnabled = false;
+        let tavilyApiKey = localStorage.getItem('ai_tavily_key') || '';
 
         const chatEl = document.getElementById("chat");
         const chatContainer = document.getElementById("chat-container");
@@ -343,6 +372,7 @@
             document.getElementById("sys-prompt").value = systemPrompt;
             document.getElementById("tools-toggle").checked = toolsEnabled;
             document.getElementById("router-toggle").checked = routerEnabled;
+            document.getElementById("tavily-key").value = tavilyApiKey;
             fetchModels();
             
             if (chats.length === 0) startNewChat();
@@ -361,6 +391,58 @@
                 sendMessage();
             }
         });
+
+        let graphInstance = null;
+        let spinAngle = 0;
+
+        async function toggleKnowledgeMap() {
+            const modal = document.getElementById("knowledge-modal");
+            if (modal.classList.contains('hidden')) {
+                modal.classList.remove('hidden');
+                setTimeout(() => modal.classList.remove('opacity-0'), 10);
+                
+                // Initialize graph if not already done
+                if (!graphInstance) {
+                    const container = document.getElementById('3d-graph-container');
+                    try {
+                        const res = await fetch('/memories_graph');
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error);
+
+                        if (data.nodes.length <= 1) {
+                            container.innerHTML = '<div class="absolute inset-0 flex items-center justify-center text-zinc-500 font-medium">No long-term memories have been saved yet. Chat with Nexus and ask it to remember things!</div>';
+                            return;
+                        }
+
+                        graphInstance = ForceGraph3D()(container)
+                            .graphData(data)
+                            .nodeLabel('desc')
+                            .nodeColor('color')
+                            .nodeVal('val')
+                            .linkColor(() => 'rgba(255, 255, 255, 0.15)')
+                            .backgroundColor('rgba(0,0,0,0)')
+                            .onNodeHover(node => container.style.cursor = node ? 'pointer' : null);
+                            
+                        // Spin effect
+                        setInterval(() => {
+                            if (!modal.classList.contains('hidden')) {
+                                graphInstance.cameraPosition({
+                                    x: 80 * Math.sin(spinAngle),
+                                    z: 80 * Math.cos(spinAngle)
+                                });
+                                spinAngle += Math.PI / 600;
+                            }
+                        }, 25);
+                    } catch (e) {
+                        console.error('Failed to load map data:', e);
+                        container.innerHTML = `<div class="absolute inset-0 flex items-center justify-center text-red-400">Failed to load memory graph: ${e.message}</div>`;
+                    }
+                }
+            } else {
+                modal.classList.add('opacity-0');
+                setTimeout(() => modal.classList.add('hidden'), 300);
+            }
+        }
 
         function toggleSettings() {
             const modal = document.getElementById("settings-modal");
@@ -405,10 +487,12 @@
             toolsEnabled = document.getElementById("tools-toggle").checked;
             routerEnabled = document.getElementById("router-toggle").checked;
             activeModel = document.getElementById("model-select").value;
+            tavilyApiKey = document.getElementById("tavily-key").value;
             localStorage.setItem('ai_sys_prompt', systemPrompt);
             localStorage.setItem('ai_tools_enabled', toolsEnabled);
             localStorage.setItem('ai_router_enabled', routerEnabled);
             localStorage.setItem('ai_model', activeModel);
+            localStorage.setItem('ai_tavily_key', tavilyApiKey);
             toggleSettings();
         }
 
@@ -604,7 +688,7 @@
             
             if (processedText.includes('<think>') && !processedText.includes('</think>')) {
                 let parts = processedText.split('<think>');
-                processedText = parts[0] + `\n<details class="think-block" open><summary class="text-xs font-bold text-yellow-500 cursor-pointer uppercase tracking-wider mb-2 outline-none">Thinking Process</summary>\n\n${parts[1]}\n\n</details>\n`;
+                processedText = parts[0] + `\n<details class="think-block" open><summary class="text-xs font-bold text-yellow-500 cursor-pointer uppercase tracking-wider mb-2 outline-none">Thinking Process</summary>\n\n${parts[1]}\n\n<div class="mt-3 text-yellow-500/60 text-xs italic animate-pulse">... thinking ...</div>\n</details>\n`;
             }
 
             const html = marked.parse(processedText, { breaks: true });
@@ -665,7 +749,11 @@
                 messageHistory.push({ role: "user", content: hiddenText });
             }
 
-            const aiMsgDiv = appendMessage("ai", '<div class="dot-typing"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>');
+            let initialPlaceholder = '<div class="text-zinc-500 text-sm italic font-medium py-1 animate-pulse tracking-wide">... working ...</div>';
+            if (thinkingEnabled) {
+                initialPlaceholder = '<div class="text-yellow-500/80 text-sm italic font-medium py-1 animate-pulse tracking-wide">... thinking ...</div>';
+            }
+            const aiMsgDiv = appendMessage("ai", initialPlaceholder);
             const contentArea = aiMsgDiv.querySelector('.content-area');
             const statusArea = aiMsgDiv.querySelector('.status-area');
             let accumulatedContent = "";
@@ -689,7 +777,8 @@
                         router_enabled: routerEnabled,
                         force_web_search: forceWebSearch,
                         thinking_enabled: thinkingEnabled,
-                        model: activeModel 
+                        model: activeModel,
+                        tavily_api_key: tavilyApiKey
                     })
                 });
 

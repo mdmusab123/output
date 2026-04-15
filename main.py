@@ -18,9 +18,12 @@ app = Flask(__name__)
 MODEL = "gemma4:e4b"
 API_URL = "http://127.0.0.1:11434/api/chat"
 UPLOAD_FOLDER = "uploads"
+TOOLS_FOLDER = "tools"
 NGROK_AUTH_TOKEN = "1xaBGSEtDnlLgIK663nvwSaOiRq_Vgj6aPE1FDxgpk9dh2MR" # Set your authtoken here
+TAVILY_API_KEY = "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"
 ngrok.set_auth_token(NGROK_AUTH_TOKEN)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(TOOLS_FOLDER, exist_ok=True)
 
 # --- CHROMA DB SETUP (LOCAL RAG) ---
 try:
@@ -139,27 +142,49 @@ def retrieve_relevant_memories(query_text):
 # --- WEB SEARCH & SCRAPING ---
 from bs4 import BeautifulSoup
 import urllib.parse
-def search_web(query):
+def search_web(query, tavily_key=""):
+    if tavily_key and tavily_key.strip():
+        try:
+            url = "https://api.tavily.com/search"
+            payload = {
+                "api_key": tavily_key.strip(),
+                "query": query,
+                "search_depth": "advanced",
+                "max_results": 5,
+                "include_images": False,
+                "include_answer": False
+            }
+            r = requests.post(url, json=payload, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            results = data.get("results", [])
+            res_strings = [f"- Source [URL: {r.get('url', '')}]: {r.get('title', '')}\n  Snippet: {r.get('content', '')}" for r in results]
+            if res_strings:
+                return "\n\n".join(res_strings)
+        except Exception:
+            pass # Fall back to DuckDuckGo
+
     try:
-        url = "https://html.duckduckgo.com/html/"
+        url = "https://lite.duckduckgo.com/lite/"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36",
+            "Content-Type": "application/x-www-form-urlencoded"
         }
         data = {"q": query}
         r = requests.post(url, data=data, headers=headers, timeout=10)
         soup = BeautifulSoup(r.text, 'html.parser')
         
         results = []
-        for d in soup.find_all('div', class_='result'):
-            a_url = d.find('a', class_='result__url')
-            a_snippet = d.find('a', class_='result__snippet')
-            if a_url and a_snippet:
-                href = a_url.get('href', '').strip()
-                # DuckDuckGo sometimes wraps hrefs, unquote them
-                if href.startswith('//duckduckgo.com/l/?uddg='):
-                    href = urllib.parse.unquote(href.split('uddg=')[1].split('&')[0])
-                snippet = a_snippet.text.strip()
-                results.append((href, snippet))
+        for tr in soup.find_all('tr'):
+            td = tr.find('td', class_='result-snippet')
+            if td:
+                a_tag = tr.previous_sibling.find('a', class_='result-url')
+                if a_tag:
+                    href = a_tag.get('href', '').strip()
+                    if href.startswith('//duckduckgo.com/l/?uddg='):
+                        href = urllib.parse.unquote(href.split('uddg=')[1].split('&')[0])
+                    snippet = td.text.strip()
+                    results.append((href, snippet))
             if len(results) >= 3:
                 break
                 
@@ -225,7 +250,7 @@ def execute_shell(command):
         return f"Shell Execution Error: {str(e)}"
 
 # --- AGENTIC LOOP AND PARSER ---
-def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True, router_enabled=True, force_web_search=False, thinking_enabled=False):
+def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True, router_enabled=True, force_web_search=False, thinking_enabled=False, tavily_key=""):
     if tools_enabled:
         user_msgs = [m["content"] for m in messages if m["role"] == "user"]
         if user_msgs:
@@ -329,6 +354,16 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                     icon = "🧠 General Node"
                     tool_instructions = "You are the General Node. If the user asks you to remember, save, or note down a fact, you MUST output ONLY this syntax:\n[MEM_SAVE: fact here]\nDo NOT converse if saving memory. Otherwise, converse normally."
 
+            # Inject custom tools from file system
+            available_tools_list = []
+            if os.path.exists(TOOLS_FOLDER):
+                for f in os.listdir(TOOLS_FOLDER):
+                    if f.endswith('.py'):
+                        available_tools_list.append(f)
+            tools_str = ", ".join(available_tools_list) if available_tools_list else "None yet."
+            
+            tool_instructions += f"\n\n[SELF-EVOLVING TOOLS]\nYou can create persistent python scripts in the tools/ directory.\nTo create a tool, output EXACTLY AND ONLY:\n[SAVE_TOOL: filename.py]\n<python code here>\n[/SAVE_TOOL]\n\nTo execute an existing tool, use: [RUN_SHELL: python tools/filename.py --args]\nAvailable custom tools in tools/ folder: {tools_str}"
+
             # Inject dynamic sub-agent instructions safely into system prompt
             if len(current_run_msgs) > 0 and current_run_msgs[0]["role"] == "system":
                 current_run_msgs[0]["content"] += "\n\n" + tool_instructions
@@ -361,11 +396,13 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                     read_url_match = re.search(r'\[READ_URL:\s*(.*?)\]', buffer)
                     python_match = re.search(r'\[PYTHON:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     shell_match = re.search(r'\[RUN_SHELL:\s*(.*?)\n?\]', buffer, re.DOTALL)
+                    save_tool_match = re.search(r'\[SAVE_TOOL:\s*([^\]]+)\](.*?)\[/SAVE_TOOL\]', buffer, re.DOTALL)
                     
                     if search_match:
                         query = search_match.group(1).strip()
-                        yield json.dumps({"type": "status", "text": f"🔍 Searching web for: {query}"}) + "\n"
-                        tool_result = search_web(query)
+                        yield json.dumps({"type": "status", "text": f"🔍 ... searching on web for: '{query}'"}) + "\n"
+                        tool_result = search_web(query, tavily_key)
+                        yield json.dumps({"type": "status", "text": f"✅ Web search completed."}) + "\n"
                         
                         current_run_msgs.append({"role": "assistant", "content": full_response})
                         current_run_msgs.append({"role": "user", "content": f"System Notice: Web Search Results:\n{tool_result}\n\nUse this information to answer the initial query."})
@@ -387,6 +424,7 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                         query = doc_search_match.group(1).strip()
                         yield json.dumps({"type": "status", "text": f"📚 Searching local documents for: {query}"}) + "\n"
                         tool_result = search_docs(query)
+                        yield json.dumps({"type": "status", "text": f"✅ Document search completed."}) + "\n"
                         
                         current_run_msgs.append({"role": "assistant", "content": full_response})
                         current_run_msgs.append({"role": "user", "content": f"System Notice: Local Document Results:\n{tool_result}\n\nSynthesize this information to answer the initial query."})
@@ -397,6 +435,7 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                         url = read_url_match.group(1).strip()
                         yield json.dumps({"type": "status", "text": f"🌐 Reading webpage: {url}"}) + "\n"
                         tool_result = read_url(url)
+                        yield json.dumps({"type": "status", "text": f"✅ Webpage read successfully."}) + "\n"
                         
                         current_run_msgs.append({"role": "assistant", "content": full_response})
                         current_run_msgs.append({"role": "user", "content": f"System Notice: Extracted Website Application Text:\n{tool_result}\n\nSynthesize this information to answer the user's initial query."})
@@ -410,6 +449,7 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                         yield json.dumps({"type": "content", "text": f"\n```python\n{code}\n```\n"}) + "\n"
                         
                         tool_result = execute_python(code)
+                        yield json.dumps({"type": "status", "text": f"✅ Execution finished."}) + "\n"
                         
                         current_run_msgs.append({"role": "assistant", "content": full_response})
                         current_run_msgs.append({"role": "user", "content": f"System Notice: Python Execution Output (stdout/stderr):\n{tool_result}\n\nUse this information to answer the initial query."})
@@ -421,10 +461,27 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                         yield json.dumps({"type": "action_request", "action": "RUN_SHELL", "command": code}) + "\n"
                         # Terminate the stream explicitly. The frontend will pick up execution.
                         break
+
+                    elif save_tool_match:
+                        filename = save_tool_match.group(1).strip()
+                        code = save_tool_match.group(2).strip()
+                        if code.startswith('```python'): code = code[9:]
+                        elif code.startswith('```'): code = code[3:]
+                        if code.endswith('```'): code = code[:-3]
+                        
+                        tool_path = os.path.join(TOOLS_FOLDER, filename)
+                        with open(tool_path, 'w', encoding='utf-8') as f:
+                            f.write(code.strip())
+                            
+                        yield json.dumps({"type": "status", "text": f"🛠️ Tool created & saved: {filename}"}) + "\n"
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: Custom tool successfully saved to {tool_path}."})
+                        tool_triggered = True
+                        break
                     
                     if len(buffer) > 60:
-                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL):', buffer):
-                            if len(buffer) > 5000: # safety bailout
+                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL|SAVE_TOOL):', buffer):
+                            if len(buffer) > 20000: # safety bailout expanded for tools
                                 yield json.dumps({"type": "content", "text": buffer}) + "\n"
                                 buffer = ""
                         else:
@@ -444,7 +501,7 @@ Output ONLY the exact category string for the final request and nothing else. Ex
                 continue
             else:
                 if buffer:
-                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL).*$', '', buffer, flags=re.DOTALL)
+                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL|SAVE_TOOL).*$', '', buffer, flags=re.DOTALL)
                     if clean_buf:
                         yield json.dumps({"type": "content", "text": clean_buf}) + "\n"
                 break
@@ -486,8 +543,47 @@ def chat():
     router_enabled = data.get("router_enabled", True)
     force_web_search = data.get("force_web_search", False)
     thinking_enabled = data.get("thinking_enabled", False)
+    tavily_key = data.get("tavily_api_key", "") or TAVILY_API_KEY
     
-    return Response(stream_with_context(ask_ai_stream(messages, target_model, tools_enabled, router_enabled, force_web_search, thinking_enabled)), mimetype='application/x-ndjson')
+    return Response(stream_with_context(ask_ai_stream(messages, target_model, tools_enabled, router_enabled, force_web_search, thinking_enabled, tavily_key)), mimetype='application/x-ndjson')
+
+@app.route("/memories_graph", methods=["GET"])
+def get_memories_graph():
+    try:
+        if memory_collection.count() == 0:
+            return {"nodes": [{"id": "user", "name": "Nexus Core", "val": 15, "color": "#14b8a6"}], "links": []}
+            
+        data = memory_collection.get(include=["documents", "metadatas"])
+        docs = data.get("documents", [])
+        ids = data.get("ids", [])
+        
+        nodes = [{"id": "user", "name": "Nexus Core", "val": 15, "color": "#14b8a6"}]
+        links = []
+        
+        for i, doc in enumerate(docs):
+            node_id = ids[i]
+            nodes.append({
+                "id": node_id, 
+                "name": doc, 
+                "val": min(8, max(3, len(doc)/20)), 
+                "color": "#f59e0b",
+                "desc": f"Memory {i+1}:\n{doc}"
+            })
+            links.append({"source": "user", "target": node_id})
+            
+        # Basic keyword clustering for visual web effect
+        for i in range(len(docs)):
+            for j in range(i+1, len(docs)):
+                doc1_words = set(docs[i].lower().split())
+                doc2_words = set(docs[j].lower().split())
+                common = doc1_words.intersection(doc2_words)
+                valid_common = [w for w in common if len(w) > 4]
+                if len(valid_common) > 0:
+                    links.append({"source": ids[i], "target": ids[j]})
+            
+        return {"nodes": nodes, "links": links}
+    except Exception as e:
+        return {"error": str(e)}, 500
 
 if __name__ == "__main__":
     try:
