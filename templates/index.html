@@ -294,6 +294,11 @@
         <div class="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#0c0c0f] via-[#0c0c0f]/95 to-transparent pt-16 pb-6 px-4 sm:px-6 z-20">
             <div class="max-w-3xl mx-auto">
                 <div class="relative glass-panel rounded-2xl group-focus-within:border-teal-500/30 transition-all flex flex-col p-2.5 shadow-2xl shadow-black/40">
+                    <div class="flex items-center px-2 pb-1 mb-1 border-b border-white/5">
+                        <select id="chat-model-select" onchange="changeModel(this.value)" class="bg-transparent text-xs text-zinc-400 font-medium outline-none cursor-pointer hover:text-teal-400 transition-colors border-none p-0 focus:ring-0 max-w-[200px] truncate" title="Select Active Model">
+                            <option value="">Loading models...</option>
+                        </select>
+                    </div>
                     <div id="staged-files" class="flex flex-wrap gap-2 mb-2 px-1 empty:hidden"></div>
                     
                     <div class="flex items-end gap-1">
@@ -566,19 +571,30 @@
             try {
                 const res = await fetch('/models');
                 const data = await res.json();
-                const select = document.getElementById('model-select');
+                const selectSettings = document.getElementById('model-select');
+                const selectChat = document.getElementById('chat-model-select');
+                
                 if (data.models && data.models.length > 0) {
-                    select.innerHTML = data.models.map(m => `<option value="${m}">${m}</option>`).join('');
-                    if (data.models.includes(activeModel)) {
-                        select.value = activeModel;
-                    } else {
+                    const optionsHTML = data.models.map(m => `<option value="${m}">${m}</option>`).join('');
+                    if (selectSettings) selectSettings.innerHTML = optionsHTML;
+                    if (selectChat) selectChat.innerHTML = optionsHTML;
+
+                    if (!data.models.includes(activeModel)) {
                         activeModel = data.models[0];
-                        select.value = activeModel;
                     }
+                    if (selectSettings) selectSettings.value = activeModel;
+                    if (selectChat) selectChat.value = activeModel;
                 }
             } catch (e) {
                 console.error("Failed to load models", e);
             }
+        }
+
+        function changeModel(val) {
+            activeModel = val;
+            localStorage.setItem('ai_model', activeModel);
+            const selectSettings = document.getElementById('model-select');
+            if (selectSettings) selectSettings.value = activeModel;
         }
 
         function saveSettings() {
