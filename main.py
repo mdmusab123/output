@@ -295,6 +295,56 @@ def get_search_urls(query, tavily_key="", max_urls=3):
         pass
     return urls
 
+# --- SELF-ANALYSIS BRAIN (Repository Intelligence) ---
+CODEBASE_ROOT = os.path.dirname(os.path.abspath(__file__))
+CODE_EXTENSIONS = {".py", ".html", ".json", ".md", ".txt", ".js", ".css"}
+EXCLUDE_DIRS = {".git", "__pycache__", "node_modules", "memory_db_vectors", "uploads", "tools"}
+
+def scan_codebase(focus_query=""):
+    """Scans the codebase and returns a structured snapshot for AI analysis."""
+    try:
+        file_tree = []
+        file_contents = []
+        total_lines = 0
+        total_files = 0
+
+        for dirpath, dirnames, filenames in os.walk(CODEBASE_ROOT):
+            # Exclude unwanted dirs
+            dirnames[:] = [d for d in dirnames if d not in EXCLUDE_DIRS]
+            for fname in filenames:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext not in CODE_EXTENSIONS:
+                    continue
+                full_path = os.path.join(dirpath, fname)
+                rel_path = os.path.relpath(full_path, CODEBASE_ROOT)
+                try:
+                    with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read()
+                    lines = content.count('\n')
+                    total_lines += lines
+                    total_files += 1
+                    file_tree.append(f"  {rel_path} ({lines} lines, {len(content)} chars)")
+                    # Only include content of primary code files to avoid token explosion
+                    if ext in {".py", ".html"} and len(content) < 40000:
+                        # Trim individual files to 6000 chars max
+                        snippet = content[:6000] + ("\n... [Truncated]" if len(content) > 6000 else "")
+                        file_contents.append(f"\n{'='*60}\nFILE: {rel_path}\n{'='*60}\n{snippet}")
+                except Exception:
+                    continue
+
+        tree_str = "\n".join(file_tree)
+        content_str = "\n".join(file_contents)
+
+        return (
+            f"[CODEBASE OVERVIEW]\n"
+            f"Root: {CODEBASE_ROOT}\n"
+            f"Total files scanned: {total_files} | Total lines: {total_lines}\n"
+            f"\n[FILE TREE]\n{tree_str}\n"
+            f"\n[FILE CONTENTS]\n{content_str}"
+        )
+    except Exception as e:
+        return f"Codebase scan failed: {e}"
+
 
 # --- LOCAL PYTHON EXECUTION ---
 import sys, io, traceback
@@ -393,9 +443,11 @@ Example: If asked to ping google, output exactly and ONLY:
                 doc_keywords = list(set(["read the file", "pdf", "document", "uploaded", "resume", "my file", "the report"] + ds_docs_kw))
                 last_user_msg = user_msgs[-1].lower() if user_msgs else ""
                 
+                analysis_keywords = ["scan", "analyze", "analyse", "your code", "your codebase", "your own", "your files", "review your", "optimize yourself", "security flaw", "find bug", "redundant", "refactor", "self-analysis", "inspect"]
                 nudge_research = any(kw in last_user_msg for kw in current_event_keywords)
                 nudge_system = any(kw in last_user_msg for kw in system_keywords)
                 nudge_docs = "has attached the following document" in last_user_msg or any(kw in last_user_msg for kw in doc_keywords)
+                nudge_analysis = any(kw in last_user_msg for kw in analysis_keywords)
                     
                 # Build few-shot examples for the router from the instruction dataset
                 research_examples = get_route_examples("RESEARCH", 3)
@@ -422,11 +474,13 @@ Categorize the user's LATEST request into EXACTLY ONE of these strings:
 [ROUTE: CODE] - Use for math, logic, scripting, or python code.
 [ROUTE: DOCS] - Use for searching or reading uploaded documents/PDFS.
 [ROUTE: SYSTEM] - Use for executing local system shell commands (e.g. installing pip packages).
+[ROUTE: ANALYSIS] - Use when the user asks to scan, review, optimize, or analyze the AI's own code/codebase.
 [ROUTE: GENERAL] - Use for general conversation only IF you are 100% sure the answer doesn't need live data.
 
 IMPORTANT: If the user asks about anything CURRENT (leaders, dates, news, status), you MUST choose [ROUTE: RESEARCH].
 IMPORTANT: If a Python script previously failed due to a missing module/library, or if the user asks to install/download something, you MUST choose [ROUTE: SYSTEM].
 IMPORTANT: If the user uploaded a document and asks you to read or summarize it, you MUST choose [ROUTE: DOCS].
+IMPORTANT: If the user asks to scan, review, or analyze the AI's own code or source files, you MUST choose [ROUTE: ANALYSIS].
 {few_shot_block}
 
 Recent User Messages Context:
@@ -434,12 +488,14 @@ Recent User Messages Context:
 
 Output ONLY the exact category string and nothing else."""
 
-                if force_web_search or (nudge_research and not nudge_docs):
+                if force_web_search or (nudge_research and not nudge_docs and not nudge_analysis):
                     route_text = "[ROUTE: RESEARCH]"
                 elif nudge_system:
                     route_text = "[ROUTE: SYSTEM]"
                 elif nudge_docs:
                     route_text = "[ROUTE: DOCS]"
+                elif nudge_analysis:
+                    route_text = "[ROUTE: ANALYSIS]"
                 else:
                     try:
                         router_res = requests.post(API_URL, json={
@@ -460,6 +516,20 @@ Output ONLY the exact category string and nothing else."""
                         "For SIMPLE factual questions, use: [SEARCH: query]\n"
                         "For COMPLEX questions needing deep research (guides, comparisons, multi-topic reports), use: [DEEP_RESEARCH: query]\n"
                         "DO NOT CONVERSE. Output ONLY the tool syntax. DO NOT ANSWER FROM MEMORY."
+                    )
+                elif "[ROUTE: ANALYSIS]" in route_text:
+                    cat = "ANALYSIS"
+                    icon = "🧬 Analysis Node"
+                    tool_instructions = (
+                        "You are the Analysis Node — a self-aware code intelligence agent.\n"
+                        "You have the power to scan your own source files and codebase.\n"
+                        "To perform an analysis, output EXACTLY AND ONLY this syntax:\n"
+                        "[ANALYZE_CODE: specific focus area or question]\n"
+                        "Examples:\n"
+                        "[ANALYZE_CODE: find security vulnerabilities in main.py]\n"
+                        "[ANALYZE_CODE: suggest routing logic optimizations]\n"
+                        "[ANALYZE_CODE: identify redundant code across all files]\n"
+                        "DO NOT CONVERSE. DO NOT GUESS. Output only the bracketed tool syntax."
                     )
                 elif "[ROUTE: CODE]" in route_text:
                     cat = "CODE"
@@ -524,6 +594,7 @@ Output ONLY the exact category string and nothing else."""
                 buffer += chunk
 
                 if '[' in buffer:
+                    analyze_match = re.search(r'\[ANALYZE_CODE:\s*(.*?)\]', buffer)
                     deep_research_match = re.search(r'\[DEEP_RESEARCH:\s*(.*?)\]', buffer)
                     search_match = re.search(r'\[SEARCH:\s*(.*?)\]', buffer)
                     mem_save_match = re.search(r'\[MEM_SAVE:\s*(.*?)\]', buffer)
@@ -533,7 +604,23 @@ Output ONLY the exact category string and nothing else."""
                     shell_match = re.search(r'\[RUN_SHELL:\s*(.*?)\n?\]', buffer, re.DOTALL)
                     save_tool_match = re.search(r'\[SAVE_TOOL:\s*([^\]]+)\](.*?)\[/SAVE_TOOL\]', buffer, re.DOTALL)
 
-                    if deep_research_match:
+                    if analyze_match:
+                        focus = analyze_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"🧬 Analysis Node activated: '{focus}'"}) + "\n"
+                        yield json.dumps({"type": "status", "text": "🗂️ Scanning codebase files..."}) + "\n"
+                        codebase_snapshot = scan_codebase(focus)
+                        yield json.dumps({"type": "status", "text": "✅ Codebase scanned. Generating analysis..."}) + "\n"
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": (
+                            f"System Notice: Codebase Snapshot Ready. Focus: '{focus}'\n\n"
+                            f"{codebase_snapshot}\n\n"
+                            "Based on the above code snapshot, provide a detailed, structured analysis for the user's focus area. "
+                            "Use headers, bullet points, and code blocks. Be specific with file names and line references."
+                        )})
+                        tool_triggered = True
+                        break
+
+                    elif deep_research_match:
                         query = deep_research_match.group(1).strip()
                         yield json.dumps({"type": "status", "text": f"🌐 Deep Research initiated: '{query}'"}) + "\n"
                         source_urls = get_search_urls(query, tavily_key, max_urls=3)
