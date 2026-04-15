@@ -13,6 +13,96 @@ import pypdf
 import chromadb
 from werkzeug.utils import secure_filename
 
+# --- Live Web Agent (Playwright) ---
+_browser_page = None
+_browser_context = None
+_playwright_instance = None
+
+def _get_browser_page():
+    """Lazily initialize a persistent Playwright browser session."""
+    global _browser_page, _browser_context, _playwright_instance
+    if _browser_page and not _browser_page.is_closed():
+        return _browser_page
+    try:
+        from playwright.sync_api import sync_playwright
+        if _playwright_instance is None:
+            _playwright_instance = sync_playwright().start()
+        browser = _playwright_instance.chromium.launch(headless=True)
+        _browser_context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        _browser_page = _browser_context.new_page()
+        return _browser_page
+    except Exception as e:
+        raise RuntimeError(f"Playwright not installed. Run: pip install playwright && python -m playwright install chromium. Error: {e}")
+
+def browse_to(url):
+    """Navigate to a URL and return visible text + interactive elements."""
+    try:
+        page = _get_browser_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(2000)  # Let JS render
+        # Extract visible text
+        text = page.evaluate("""() => {
+            const sel = document.querySelectorAll('script, style, nav, footer, header, aside, noscript');
+            sel.forEach(e => e.remove());
+            return document.body.innerText;
+        }""")
+        # Extract interactive elements for the AI
+        elements = page.evaluate("""() => {
+            const items = [];
+            document.querySelectorAll('a[href], button, input, select, textarea').forEach((el, i) => {
+                if (i > 40) return;
+                const tag = el.tagName.toLowerCase();
+                const text = (el.innerText || el.value || el.placeholder || '').trim().slice(0, 80);
+                const href = el.href || '';
+                const type = el.type || '';
+                const id = el.id || '';
+                const name = el.name || '';
+                const cls = el.className?.toString?.()?.slice(0, 60) || '';
+                items.push({tag, text, href, type, id, name, cls});
+            });
+            return items;
+        }""")
+        text = text.strip()
+        if len(text) > 6000:
+            text = text[:6000] + "\n... [Content Truncated]"
+        elements_str = "\n".join([f"  [{e['tag']}] text='{e['text']}' id='{e['id']}' name='{e['name']}' href='{e['href'][:80]}' type='{e['type']}'" for e in elements[:40]])
+        return f"Page Title: {page.title()}\nURL: {page.url}\n\n--- Visible Text ---\n{text}\n\n--- Interactive Elements ---\n{elements_str}"
+    except Exception as e:
+        return f"Browse Error: {str(e)}"
+
+def browser_click(selector):
+    """Click an element by CSS selector or text."""
+    try:
+        page = _get_browser_page()
+        # Try CSS selector first
+        try:
+            page.click(selector, timeout=5000)
+        except Exception:
+            # Fallback: click by visible text
+            page.get_by_text(selector, exact=False).first.click(timeout=5000)
+        page.wait_for_timeout(1500)
+        text = page.evaluate("() => document.body.innerText").strip()
+        if len(text) > 4000:
+            text = text[:4000] + "\n... [Truncated]"
+        return f"Clicked '{selector}'. Current page: {page.title()} ({page.url})\n\n{text}"
+    except Exception as e:
+        return f"Click Error: {str(e)}"
+
+def browser_type(selector, value):
+    """Type text into an input field."""
+    try:
+        page = _get_browser_page()
+        try:
+            page.fill(selector, value, timeout=5000)
+        except Exception:
+            page.get_by_placeholder(selector, exact=False).first.fill(value, timeout=5000)
+        page.wait_for_timeout(500)
+        return f"Typed '{value}' into '{selector}'. Page: {page.title()}"
+    except Exception as e:
+        return f"Type Error: {str(e)}"
+
 app = Flask(__name__)
 
 # CONFIGURATION
@@ -485,7 +575,7 @@ VISION_MODEL = "llava"  # Ollama vision model — run: ollama pull llava
 ROUTER_MODEL = "qwen2:0.5b"  # Ultra-fast routing model — run: ollama pull qwen2:0.5b
 
 # --- AGENTIC LOOP AND PARSER ---
-def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True, router_enabled=True, force_web_search=False, thinking_enabled=False, tavily_key="", vision_enabled=False):
+def ask_ai_stream(messages, target_model=MODEL, tools_enabled=True, router_enabled=True, force_web_search=False, thinking_enabled=False, tavily_key="", vision_enabled=False, browse_enabled=False):
     # --- CONTEXT PRUNING (SLIDING WINDOW) ---
     MAX_MESSAGES = 10
     if len(messages) > MAX_MESSAGES:
@@ -691,6 +781,12 @@ Output ONLY the exact category string and nothing else."""
                         "To write a file to disk, output EXACTLY AND ONLY:\n[WRITE_FILE: path/to/file.ext]\ncontent\n[/WRITE_FILE]\n"
                         "To read a file from disk, output EXACTLY AND ONLY:\n[READ_FILE: path/to/file.ext]\n"
                     )
+                    if browse_enabled:
+                        tool_instructions += (
+                            "\nYou also have a LIVE WEB BROWSER. To navigate to a URL and see page content:\n[BROWSE: https://example.com]\n"
+                            "To click an element on the current page:\n[BROWSER_CLICK: css_selector_or_visible_text]\n"
+                            "To type into a form field:\n[BROWSER_TYPE: selector | text to type]\n"
+                        )
                 elif "[ROUTE: DATA]" in route_text:
                     cat = "DATA"
                     icon = "📊 Data Agent"
@@ -732,8 +828,14 @@ Output ONLY the exact category string and nothing else."""
                         "- [WRITE_FILE: path/to/file.ext]\ncontent\n[/WRITE_FILE]\n"
                         "- [READ_FILE: path]\n"
                         "- [RUN_SHELL: command]\n"
-                        "Remember: Output ONLY ONE tool per response. Do not output multiple bracketed tool calls at once. Wait for the system notice containing tool results."
                     )
+                    if browse_enabled:
+                        tool_instructions += (
+                            "- [BROWSE: url] — navigate to a live webpage and read its content\n"
+                            "- [BROWSER_CLICK: selector_or_text] — click an element on the current page\n"
+                            "- [BROWSER_TYPE: selector | text] — type into a form field\n"
+                        )
+                    tool_instructions += "Remember: Output ONLY ONE tool per response. Do not output multiple bracketed tool calls at once. Wait for the system notice containing tool results."
                 else:
                     cat = "GENERAL"
                     icon = "🧠 General Node"
@@ -796,6 +898,9 @@ Output ONLY the exact category string and nothing else."""
                     save_tool_match = re.search(r'\[SAVE_TOOL:\s*([^\]]+)\](.*?)\[/SAVE_TOOL\]', buffer, re.DOTALL)
                     write_file_match = re.search(r'\[WRITE_FILE:\s*([^\]]+)\](.*?)\[/WRITE_FILE\]', buffer, re.DOTALL)
                     read_file_match = re.search(r'\[READ_FILE:\s*([^\]]+)\]', buffer)
+                    browse_match = re.search(r'\[BROWSE:\s*(.*?)\]', buffer)
+                    browser_click_match = re.search(r'\[BROWSER_CLICK:\s*(.*?)\]', buffer)
+                    browser_type_match = re.search(r'\[BROWSER_TYPE:\s*(.*?)\]', buffer)
 
                     if analyze_data_match:
                         instructions = analyze_data_match.group(1).strip()
@@ -975,6 +1080,39 @@ Output ONLY the exact category string and nothing else."""
                         tool_triggered = True
                         break
 
+                    elif browse_match:
+                        url = browse_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"🌐 Web Agent browsing: {url}"}) + "\n"
+                        tool_result = browse_to(url)
+                        yield json.dumps({"type": "status", "text": f"✅ Page loaded successfully."}) + "\n"
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: [BROWSE] Result:\n{tool_result}\n\nAnalyze this page content and proceed. If you need to interact with the page (click a button, fill a form), use [BROWSER_CLICK: selector] or [BROWSER_TYPE: selector | text]. Otherwise, answer the user's query using the extracted content."})
+                        tool_triggered = True
+                        break
+
+                    elif browser_click_match:
+                        selector = browser_click_match.group(1).strip()
+                        yield json.dumps({"type": "status", "text": f"👆 Clicking: {selector}"}) + "\n"
+                        tool_result = browser_click(selector)
+                        yield json.dumps({"type": "status", "text": f"✅ Click executed."}) + "\n"
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: [BROWSER_CLICK] Result:\n{tool_result}\n\nProceed with the next step."})
+                        tool_triggered = True
+                        break
+
+                    elif browser_type_match:
+                        raw = browser_type_match.group(1).strip()
+                        parts = raw.split('|', 1)
+                        selector = parts[0].strip()
+                        value = parts[1].strip() if len(parts) > 1 else ''
+                        yield json.dumps({"type": "status", "text": f"⌨️ Typing into: {selector}"}) + "\n"
+                        tool_result = browser_type(selector, value)
+                        yield json.dumps({"type": "status", "text": f"✅ Text entered."}) + "\n"
+                        current_run_msgs.append({"role": "assistant", "content": full_response})
+                        current_run_msgs.append({"role": "user", "content": f"System Notice: [BROWSER_TYPE] Result:\n{tool_result}\n\nProceed with the next step."})
+                        tool_triggered = True
+                        break
+
                     elif write_file_match:
                         filepath = write_file_match.group(1).strip()
                         content = write_file_match.group(2).strip()
@@ -1014,7 +1152,7 @@ Output ONLY the exact category string and nothing else."""
                         break
                     
                     if len(buffer) > 60:
-                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL|SAVE_TOOL|WRITE_FILE|READ_FILE):', buffer):
+                        if re.match(r'^\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL|SAVE_TOOL|WRITE_FILE|READ_FILE|BROWSE|BROWSER_CLICK|BROWSER_TYPE):', buffer):
                             if len(buffer) > 20000: # safety bailout expanded for tools
                                 yield json.dumps({"type": "content", "text": buffer}) + "\n"
                                 buffer = ""
@@ -1035,7 +1173,7 @@ Output ONLY the exact category string and nothing else."""
                 continue
             else:
                 if buffer:
-                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL|SAVE_TOOL|WRITE_FILE|READ_FILE).*$', '', buffer, flags=re.DOTALL)
+                    clean_buf = re.sub(r'\[(?:SEARCH|MEM_SAVE|SEARCH_DOC|READ_URL|PYTHON|RUN_SHELL|SAVE_TOOL|WRITE_FILE|READ_FILE|BROWSE|BROWSER_CLICK|BROWSER_TYPE).*$', '', buffer, flags=re.DOTALL)
                     if clean_buf:
                         yield json.dumps({"type": "content", "text": clean_buf}) + "\n"
                 break
@@ -1078,9 +1216,10 @@ def chat():
     force_web_search = data.get("force_web_search", False)
     thinking_enabled = data.get("thinking_enabled", False)
     vision_enabled = data.get("vision_enabled", False)
+    browse_enabled = data.get("browse_enabled", False)
     tavily_key = data.get("tavily_api_key", "") or TAVILY_API_KEY
     
-    return Response(stream_with_context(ask_ai_stream(messages, target_model, tools_enabled, router_enabled, force_web_search, thinking_enabled, tavily_key, vision_enabled)), mimetype='application/x-ndjson')
+    return Response(stream_with_context(ask_ai_stream(messages, target_model, tools_enabled, router_enabled, force_web_search, thinking_enabled, tavily_key, vision_enabled, browse_enabled)), mimetype='application/x-ndjson')
 
 @app.route("/charts/<filename>")
 def serve_chart(filename):

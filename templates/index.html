@@ -521,6 +521,16 @@
                             </svg>
                         </button>
 
+                        <!-- Browse Agent Toggle -->
+                        <button id="browse-btn" onclick="toggleBrowse()" class="toolbar-btn p-2 mb-0.5 text-zinc-500 hover:text-zinc-300 rounded-lg shrink-0 flex items-center">
+                            <span class="tooltip">Web Agent</span>
+                            <svg class="w-[18px] h-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+                                <line x1="8" y1="21" x2="16" y2="21"/>
+                                <line x1="12" y1="17" x2="12" y2="21"/>
+                            </svg>
+                        </button>
+
                         <button id="send-btn" onclick="sendMessage()" class="send-btn p-2.5 mb-0.5 rounded-xl disabled:cursor-not-allowed shrink-0">
                             <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
                         </button>
@@ -614,6 +624,7 @@
         let forceWebSearch = false;
         let thinkingEnabled = false;
         let visionEnabled = false;
+        let browseEnabled = false;
         let ttsEnabled = false;
         let tavilyApiKey = localStorage.getItem('ai_tavily_key') || '';
 
@@ -805,6 +816,20 @@
                 btn.classList.add('text-zinc-500');
                 btn.classList.remove('text-violet-400', 'bg-violet-500/10', 'border', 'border-violet-500/30');
                 btn.title = 'Vision Node (llava) - Click to Enable';
+            }
+        }
+
+        function toggleBrowse() {
+            browseEnabled = !browseEnabled;
+            const btn = document.getElementById('browse-btn');
+            if (browseEnabled) {
+                btn.classList.remove('text-zinc-500');
+                btn.classList.add('text-cyan-400', 'bg-cyan-500/10', 'border', 'border-cyan-500/30');
+                btn.title = '🌐 Web Agent ACTIVE — Click to Disable';
+            } else {
+                btn.classList.add('text-zinc-500');
+                btn.classList.remove('text-cyan-400', 'bg-cyan-500/10', 'border', 'border-cyan-500/30');
+                btn.title = 'Web Agent (Playwright) — Click to Enable';
             }
         }
 
@@ -1071,6 +1096,7 @@
                         force_web_search: forceWebSearch,
                         thinking_enabled: thinkingEnabled,
                         vision_enabled: visionEnabled,
+                        browse_enabled: browseEnabled,
                         model: activeModel,
                         tavily_api_key: tavilyApiKey
                     })
