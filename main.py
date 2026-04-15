@@ -348,7 +348,7 @@ def chat():
 
 if __name__ == "__main__":
     # 1. Add Ngrok auth token here if you have one (optional but recommended)
-    # ngrok.set_auth_token("YOUR_AUTH_TOKEN_HERE")
+    ngrok.set_auth_token("1xaBGSEtDnlLgIK663nvwSaOiRq_Vgj6aPE1FDxgpk9dh2MR")
 
     # 2. Open a ngrok tunnel to the dev server
     public_url = ngrok.connect(5000).public_url
