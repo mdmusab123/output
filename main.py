@@ -107,7 +107,7 @@ app = Flask(__name__)
 
 # CONFIGURATION
 MODEL = "gemma4:e4b"
-API_URL = "https://jeans-blank-entered-chuck.trycloudflare.com/api/generate"
+API_URL = "http://localhost:11434/api/chat"
 UPLOAD_FOLDER = "uploads"
 TOOLS_FOLDER = "tools"
 NGROK_AUTH_TOKEN = "1xaBGSEtDnlLgIK663nvwSaOiRq_Vgj6aPE1FDxgpk9dh2MR" # Set your authtoken here
